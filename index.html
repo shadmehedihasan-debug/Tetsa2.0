@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pan-Tilt Sentry</title>
+<style>
+  :root { --bg:#101214; --fg:#f2f2f2; --muted:#9aa0a6; --accent:#34c759; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:15px/1.4 system-ui, sans-serif; }
+  body { display:flex; flex-direction:column; padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+  #stage { position:relative; flex:1; min-height:0; background:#000; }
+  #stage video, #stage canvas { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; }
+  #hud { position:absolute; left:8px; top:8px; right:8px; pointer-events:none; text-shadow:0 1px 3px #000; font-size:13px; }
+  #panel { padding:10px; display:flex; flex-wrap:wrap; gap:8px; align-items:center; background:#1a1d20; max-height:45%; overflow:auto; }
+  button { font:inherit; padding:9px 12px; border-radius:10px; border:1px solid #3a3f44; background:#262a2e; color:var(--fg); }
+  button.primary { background:var(--accent); color:#04210d; border-color:transparent; font-weight:600; }
+  button:disabled { opacity:.4; }
+  label { display:flex; align-items:center; gap:6px; color:var(--muted); }
+  #status, #counts { width:100%; color:var(--muted); font-size:13px; }
+</style>
+</head>
+<body>
+<div id="stage"><video id="video" playsinline muted></video><canvas id="overlay"></canvas><div id="hud"></div></div>
+<div id="panel">
+  <button id="startBtn" class="primary">Start camera</button>
+  <button id="bleBtn" disabled>Connect device</button>
+  <button id="lightBtn" disabled>Light</button>
+  <button id="testBtn" disabled>Test alert</button>
+  <button id="centerBtn" disabled>Center</button>
+  <label><input type="checkbox" id="patrolChk" checked> patrol when idle</label>
+  <label><input type="checkbox" id="sendChk"> send alerts</label>
+  <label><input type="checkbox" id="peopleChk"> save photos of people</label>
+  <label><input type="checkbox" id="invPan"> invert pan</label>
+  <label><input type="checkbox" id="invTilt"> invert tilt</label>
+  <button id="resetBtn">Reset saved data</button>
+  <div id="counts"></div>
+  <div id="status">Ready. Tap "Start camera".</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.min.js"></script>
+<script src="yolo.js"></script>
+<script src="tracker.js"></script>
+<script src="security.js"></script>
+<script>
+// ---- Settings -------------------------------------------------------------
+const ALERT_URL = '';          // your Worker URL from alert_relay.js. Empty = alerts are only saved on this phone.
+const ALERT_KEY = '';          // the API_KEY you set on the Worker
+const PEOPLE_EVERY_MS = 5000;  // at most one saved person photo per this interval
+const PEOPLE_KEEP_MS = 24 * 3600 * 1000;   // saved people photos are deleted after this long
+const BUZZ_MS = 3000;
+// ---------------------------------------------------------------------------
+
+const $ = id => document.getElementById(id);
+const video = $('video'), overlay = $('overlay'), hud = $('hud'), statusEl = $('status');
+const setStatus = t => { statusEl.textContent = t; };
+ort.env.wasm.numThreads = 1;
+
+const monitor = new SecurityMonitor();
+const link = new BleLink(setStatus);
+let running = false, busy = false, lastPeople = 0, lightManual = false, lightSent = null;
+const fpsWindow = [];
+const snap = document.createElement('canvas'), sctx = snap.getContext('2d', { willReadFrequently: true });
+
+// ---- Saved data (IndexedDB, stays on this phone) --------------------------
+const dbp = new Promise((res, rej) => {
+  const r = indexedDB.open('sentry', 1);
+  r.onupgradeneeded = () => { for (const s of ['alerts', 'people']) r.result.createObjectStore(s, { autoIncrement: true }); };
+  r.onsuccess = () => res(r.result);
+  r.onerror = () => rej(r.error);
+});
+async function tx(store, mode, fn) {
+  const db = await dbp;
+  return new Promise((res, rej) => {
+    const t = db.transaction(store, mode), req = fn(t.objectStore(store));
+    t.oncomplete = () => res(req && req.result);
+    t.onerror = () => rej(t.error);
+  });
+}
+const dbPut = (s, v) => tx(s, 'readwrite', o => o.add(v));
+const dbCount = s => tx(s, 'readonly', o => o.count());
+const dbClear = s => tx(s, 'readwrite', o => o.clear());
+async function dbPurge(store, olderMs) {
+  const db = await dbp;
+  return new Promise(res => {
+    const t = db.transaction(store, 'readwrite');
+    t.objectStore(store).openCursor().onsuccess = e => {
+      const c = e.target.result;
+      if (c) { if (c.value.t < Date.now() - olderMs) c.delete(); c.continue(); }
+    };
+    t.oncomplete = res;
+  });
+}
+async function refreshCounts() {
+  try { $('counts').textContent = `Saved on this phone: ${await dbCount('alerts')} alerts, ${await dbCount('people')} people photos`; }
+  catch (e) { $('counts').textContent = 'Storage unavailable: ' + e.message; }
+}
+$('resetBtn').onclick = async () => {
+  if (!confirm('Delete ALL saved alerts and people photos from this phone?')) return;
+  await dbClear('alerts'); await dbClear('people'); await refreshCounts(); setStatus('Saved data deleted.');
+};
+
+// ---- Photos ---------------------------------------------------------------
+// Crops draw from `snap` synchronously, so they always show the frame the detection came from.
+function cropBlob(box, pad = 0.15) {
+  const w = box.x2 - box.x1, h = box.y2 - box.y1;
+  const x = Math.max(0, box.x1 - w * pad), y = Math.max(0, box.y1 - h * pad);
+  const x2 = Math.min(snap.width, box.x2 + w * pad), y2 = Math.min(snap.height, box.y2 + h * pad);
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, x2 - x); c.height = Math.max(1, y2 - y);
+  c.getContext('2d').drawImage(snap, x, y, c.width, c.height, 0, 0, c.width, c.height);
+  return new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+}
+const frameBlob = () => new Promise(r => snap.toBlob(r, 'image/jpeg', 0.85));
+const area = b => (b.x2 - b.x1) * (b.y2 - b.y1);
+
+// ---- Alerts ---------------------------------------------------------------
+async function deliver(caption, blobs) {
+  await dbPut('alerts', { t: Date.now(), caption, ...blobs });
+  refreshCounts();
+  if (!$('sendChk').checked) return setStatus('Alert saved (sending is off): ' + caption);
+  if (!ALERT_URL) return setStatus('Alert saved, but ALERT_URL is empty: ' + caption);
+  const fd = new FormData();
+  fd.append('caption', caption);
+  for (const [k, b] of Object.entries(blobs)) if (b) fd.append(k, b, k + '.jpg');
+  try {
+    const r = await fetch(ALERT_URL, { method: 'POST', headers: ALERT_KEY ? { 'x-api-key': ALERT_KEY } : {}, body: fd });
+    setStatus(r.ok ? 'Alert sent: ' + caption : 'Alert FAILED to send (' + r.status + ')');
+  } catch (e) { setStatus('Alert FAILED to send: ' + e.message); }
+}
+
+function onThreat(ev) {
+  const jobs = [frameBlob(), cropBlob(ev.box), ev.person ? cropBlob(ev.person) : Promise.resolve(null)];   // capture NOW
+  link.command('B1'); setTimeout(() => link.command('B0'), BUZZ_MS);
+  const caption = `POSSIBLE ${ev.label.toUpperCase()} (${Math.round(ev.score * 100)}% confidence)`
+    + (ev.person ? `, held by a person` + (ev.distanceM ? ` about ${ev.distanceM} m away` : '') : ', no person matched')
+    + ` - ${new Date().toLocaleTimeString()}. Automatic detection, please review.`;
+  Promise.all(jobs).then(([snapshot, object, person]) => deliver(caption, { snapshot, object, person }));
+}
+
+$('testBtn').onclick = async () => {
+  if (!running) return;
+  sctx.drawImage(video, 0, 0, snap.width, snap.height);
+  await deliver('TEST ALERT - ' + new Date().toLocaleTimeString(), { snapshot: await frameBlob() });
+};
+
+// ---- Controls -------------------------------------------------------------
+$('patrolChk').onchange = e => { monitor.cfg.patrol.enabled = e.target.checked; };
+$('invPan').onchange = e => { monitor.tracker.cfg.pan.invert = e.target.checked; };
+$('invTilt').onchange = e => { monitor.tracker.cfg.tilt.invert = e.target.checked; };
+$('lightBtn').onclick = () => { lightManual = !lightManual; $('lightBtn').style.outline = lightManual ? '2px solid #ffd60a' : ''; };
+function sendCenter() { monitor.reset(); link.lastSent = ''; link.send(monitor.tracker.pan, monitor.tracker.tilt); }
+$('centerBtn').onclick = sendCenter;
+$('bleBtn').onclick = async () => {
+  try { await link.connect(); for (const id of ['centerBtn', 'lightBtn', 'testBtn']) $(id).disabled = false; lightSent = null; sendCenter(); }
+  catch (e) { setStatus('Bluetooth: ' + e.message); }
+};
+
+$('startBtn').onclick = async () => {
+  $('startBtn').disabled = true;
+  try {
+    setStatus('Starting camera...');
+    video.srcObject = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+    await video.play();
+    try { await navigator.wakeLock.request('screen'); } catch (_) {}
+    setStatus('Loading model (first time can take a while)...');
+    await loadModel();
+    overlay.width = snap.width = video.videoWidth;
+    overlay.height = snap.height = video.videoHeight;
+    $('bleBtn').disabled = false; $('testBtn').disabled = false;
+    running = true;
+    setStatus('Running. Tap "Connect device" to link the ESP32.');
+    loop();
+  } catch (e) { setStatus('Error: ' + e.message); $('startBtn').disabled = false; }
+};
+
+async function loop() {
+  if (!running) return;
+  if (!busy && video.readyState >= 2) {
+    busy = true;
+    try {
+      sctx.drawImage(video, 0, 0, snap.width, snap.height);       // frame the detection will describe
+      const captureTime = performance.now();
+      const dets = await detect(video);
+      const now = performance.now();
+      const W = video.videoWidth, H = video.videoHeight;
+      const st = monitor.update(dets, W, H, now, captureTime);
+
+      for (const ev of st.events) onThreat(ev);
+
+      if ($('peopleChk').checked && now - lastPeople > PEOPLE_EVERY_MS) {
+        const p = dets.filter(d => d.label === 'Human' && d.score >= 0.6).sort((a, b) => area(b) - area(a))[0];
+        if (p) { lastPeople = now; cropBlob(p).then(b => dbPut('people', { t: Date.now(), blob: b })).then(refreshCounts); }
+      }
+
+      const wantLight = lightManual || st.mode === 'confirming' || st.mode === 'alerted';
+      if (link.connected && wantLight !== lightSent) { lightSent = wantLight; link.command(wantLight ? 'L1' : 'L0'); }
+      if (link.connected) link.send(st.pan, st.tilt);
+
+      const ctx = overlay.getContext('2d');
+      ctx.clearRect(0, 0, W, H);
+      drawDetections(ctx, dets);
+      if (st.target) { ctx.strokeStyle = '#ffd60a'; ctx.lineWidth = 4; ctx.strokeRect(st.target.x1, st.target.y1, st.target.x2 - st.target.x1, st.target.y2 - st.target.y1); }
+      fpsWindow.push(now); while (fpsWindow.length > 10) fpsWindow.shift();
+      const fps = fpsWindow.length > 1 ? 1000 * (fpsWindow.length - 1) / (now - fpsWindow[0]) : 0;
+      hud.textContent = `${fps.toFixed(1)} fps | ${st.mode.toUpperCase()} | pan ${st.pan.toFixed(0)} tilt ${st.tilt.toFixed(0)}`
+        + (st.distanceM ? ` | person ~${st.distanceM} m` : '') + (link.connected ? ' | device linked' : ' | device not linked');
+    } catch (e) { setStatus('Detection error: ' + e.message); }
+    busy = false;
+  }
+  requestAnimationFrame(loop);
+}
+
+dbPurge('people', PEOPLE_KEEP_MS).then(refreshCounts).catch(() => refreshCounts());
+</script>
+</body>
+</html>
