@@ -24,7 +24,8 @@
 <div id="stage"><video id="video" playsinline muted></video><canvas id="overlay"></canvas><div id="hud"></div></div>
 <div id="panel">
   <button id="startBtn" class="primary">Start camera</button>
-  <button id="bleBtn" disabled>Connect device</button>
+  <button id="bleBtn" disabled>Connect Bluetooth</button>
+  <button id="usbBtn" disabled>Connect USB</button>
   <button id="lightBtn" disabled>Light</button>
   <button id="testBtn" disabled>Test alert</button>
   <button id="centerBtn" disabled>Center</button>
@@ -42,6 +43,7 @@
 <script src="yolo.js"></script>
 <script src="tracker.js"></script>
 <script src="security.js"></script>
+<script src="serial_link.js"></script>
 <script>
 // ---- Settings -------------------------------------------------------------
 const ALERT_URL = '';          // your Worker URL from alert_relay.js. Empty = alerts are only saved on this phone.
@@ -54,10 +56,24 @@ const BUZZ_MS = 3000;
 const $ = id => document.getElementById(id);
 const video = $('video'), overlay = $('overlay'), hud = $('hud'), statusEl = $('status');
 const setStatus = t => { statusEl.textContent = t; };
+
+// Stop with a clear message if a file is missing or is an OLD version (a common cause of "x is not defined").
+{
+  const bad = [];
+  if (typeof ort === 'undefined') bad.push('onnxruntime-web (needs internet to load from the CDN)');
+  if (typeof loadModel !== 'function' || typeof detect !== 'function' || typeof HEADS === 'undefined') bad.push('yolo.js');
+  if (typeof PanTiltTracker === 'undefined') bad.push('tracker.js');
+  if (typeof SecurityMonitor === 'undefined') bad.push('security.js');
+  if (typeof SerialLink === 'undefined') bad.push('serial_link.js');
+  if (bad.length) {
+    setStatus('Missing or outdated: ' + bad.join(', ') + '. Put the latest copies of all the files in the same folder as index.html, then hard-refresh (Ctrl+Shift+R).');
+    throw new Error('missing files: ' + bad.join(', '));
+  }
+}
 ort.env.wasm.numThreads = 1;
 
 const monitor = new SecurityMonitor();
-const link = new BleLink(setStatus);
+let link = new BleLink(setStatus);
 let running = false, busy = false, lastPeople = 0, lightManual = false, lightSent = null;
 const fpsWindow = [];
 const snap = document.createElement('canvas'), sctx = snap.getContext('2d', { willReadFrequently: true });
@@ -151,10 +167,17 @@ $('invTilt').onchange = e => { monitor.tracker.cfg.tilt.invert = e.target.checke
 $('lightBtn').onclick = () => { lightManual = !lightManual; $('lightBtn').style.outline = lightManual ? '2px solid #ffd60a' : ''; };
 function sendCenter() { monitor.reset(); link.lastSent = ''; link.send(monitor.tracker.pan, monitor.tracker.tilt); }
 $('centerBtn').onclick = sendCenter;
-$('bleBtn').onclick = async () => {
-  try { await link.connect(); for (const id of ['centerBtn', 'lightBtn', 'testBtn']) $(id).disabled = false; lightSent = null; sendCenter(); }
-  catch (e) { setStatus('Bluetooth: ' + e.message); }
-};
+async function connectWith(LinkClass, name) {
+  try {
+    if (link.disconnect) link.disconnect();
+    link = new LinkClass(setStatus);
+    await link.connect();
+    for (const id of ['centerBtn', 'lightBtn', 'testBtn']) $(id).disabled = false;
+    lightSent = null; sendCenter();
+  } catch (e) { setStatus(name + ': ' + e.message); }
+}
+$('bleBtn').onclick = () => connectWith(BleLink, 'Bluetooth');
+$('usbBtn').onclick = () => connectWith(SerialLink, 'USB');
 
 $('startBtn').onclick = async () => {
   $('startBtn').disabled = true;
@@ -168,9 +191,9 @@ $('startBtn').onclick = async () => {
     await loadModel();
     overlay.width = snap.width = video.videoWidth;
     overlay.height = snap.height = video.videoHeight;
-    $('bleBtn').disabled = false; $('testBtn').disabled = false;
+    $('bleBtn').disabled = false; $('usbBtn').disabled = false; $('testBtn').disabled = false;
     running = true;
-    setStatus('Running. Tap "Connect device" to link the ESP32.');
+    setStatus('Running. Tap "Connect USB" (Arduino) or "Connect Bluetooth" (ESP32) to link the controller.');
     loop();
   } catch (e) { setStatus('Error: ' + e.message); $('startBtn').disabled = false; }
 };
