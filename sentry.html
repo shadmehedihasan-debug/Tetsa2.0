@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pan-Tilt Sentry</title>
+<style>
+  :root { --bg:#101214; --fg:#f2f2f2; --muted:#9aa0a6; --accent:#34c759; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:15px/1.4 system-ui, sans-serif; }
+  body { display:flex; flex-direction:column; padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+  #stage { position:relative; flex:1; min-height:0; background:#000; }
+  #stage video, #stage canvas { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; }
+  #hud { position:absolute; left:8px; top:8px; right:8px; pointer-events:none; text-shadow:0 1px 3px #000; font-size:13px; }
+  #panel { padding:10px; display:flex; flex-wrap:wrap; gap:8px; align-items:center; background:#1a1d20; max-height:45%; overflow:auto; }
+  button { font:inherit; padding:9px 12px; border-radius:10px; border:1px solid #3a3f44; background:#262a2e; color:var(--fg); }
+  button.primary { background:var(--accent); color:#04210d; border-color:transparent; font-weight:600; }
+  button:disabled { opacity:.4; }
+  label { display:flex; align-items:center; gap:6px; color:var(--muted); }
+  #status, #counts { width:100%; color:var(--muted); font-size:13px; }
+</style>
+</head>
+<body>
+<div id="stage"><video id="video" playsinline muted></video><canvas id="overlay"></canvas><div id="hud"></div></div>
+<div id="panel">
+  <button id="startBtn" class="primary">Start camera</button>
+  <button id="bleBtn" disabled>Connect Bluetooth</button>
+  <button id="usbBtn" disabled>Connect USB</button>
+  <button id="lightBtn" disabled>Light</button>
+  <button id="testBtn" disabled>Test alert</button>
+  <button id="centerBtn" disabled>Center</button>
+  <label><input type="checkbox" id="patrolChk" checked> patrol when idle</label>
+  <label><input type="checkbox" id="sendChk"> send alerts</label>
+  <label><input type="checkbox" id="peopleChk"> save photos of people</label>
+  <label><input type="checkbox" id="invPan"> invert pan</label>
+  <label><input type="checkbox" id="invTilt"> invert tilt</label>
+  <button id="resetBtn">Reset saved data</button>
+  <div id="counts"></div>
+  <div id="status">Ready. Tap "Start camera".</div>
+</div>
+
+<script>
+// Records scripts that fail to load or crash, so the startup check can say WHY a file is "missing".
+window.__loadIssues = {};
+window.addEventListener('error', e => {
+  const t = e.target, isScript = !!(t && t.tagName === 'SCRIPT');
+  const base = (isScript ? (t.getAttribute('src') || '') : (e.filename || '')).split('?')[0].split('/').pop();
+  if (base) window.__loadIssues[base] = isScript ? 'file not found (404) or blocked' : 'it crashed: ' + e.message;
+}, true);
+</script>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.min.js"></script>
+<script>
+// ===== yolo.js =====
+// yolo.js — runs the merged model threat_detector.onnx (built by build_combined.py).
+//
+//   input  "images"      float32 [1,3,640,640], RGB 0..1
+//   output "weapon_out"  [1, 8, 8400]   (4 box values + 4 classes)
+//   output "human_out"   [1, 84, 8400]  (COCO, 4 box values + 80 classes; only class 0 'person' is kept)
+//
+// Boxes are (cx,cy,w,h) in 640px space, class scores are already 0..1.
+//
+// Requires onnxruntime-web:
+//   <\script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"><\/script>
+
+const INPUT_SIZE = 640;
+const NUM_ANCHORS = 8400;
+const IOU_THRESHOLD = 0.45;
+
+const MODEL_URL = 'threat_detector.onnx';
+
+// One entry per model output. `rows` is the expected size of the output's 2nd dimension;
+// `classes` lists the class IDs to keep, each with its own display label and confidence threshold.
+const HEADS = [
+  {
+    output: 'weapon_out',
+    rows: 8,
+    color: '#ff3b30',
+    classes: [
+      { id: 0, label: 'Gun',       conf: 0.5 },
+      { id: 1, label: 'Explosion', conf: 0.5 },   // metadata name is 'explosion'
+      { id: 2, label: 'Grenade',   conf: 0.5 },
+      { id: 3, label: 'Knife',     conf: 0.5 },
+    ],
+  },
+  {
+    output: 'human_out',
+    rows: 84,
+    color: '#34c759',
+    classes: [
+      { id: 0, label: 'Human', conf: 0.4 },        // COCO 'person', renamed
+    ],
+  },
+];
+
+let session = null;
+
+async function loadModel(url = MODEL_URL) {
+  session = await ort.InferenceSession.create(url, { executionProviders: ['wasm'] });
+  return session;
+}
+
+// Resize with aspect ratio preserved, pad to 640x640 with gray (114), return CHW float tensor.
+function preprocess(source) {
+  const sw = source.videoWidth || source.naturalWidth || source.width;
+  const sh = source.videoHeight || source.naturalHeight || source.height;
+
+  const scale = Math.min(INPUT_SIZE / sw, INPUT_SIZE / sh);
+  const nw = Math.round(sw * scale);
+  const nh = Math.round(sh * scale);
+  const padX = Math.floor((INPUT_SIZE - nw) / 2);
+  const padY = Math.floor((INPUT_SIZE - nh) / 2);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = INPUT_SIZE;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.fillStyle = 'rgb(114,114,114)';
+  ctx.fillRect(0, 0, INPUT_SIZE, INPUT_SIZE);
+  ctx.drawImage(source, padX, padY, nw, nh);
+
+  const { data } = ctx.getImageData(0, 0, INPUT_SIZE, INPUT_SIZE); // RGBA
+  const plane = INPUT_SIZE * INPUT_SIZE;
+  const input = new Float32Array(3 * plane);
+  for (let i = 0; i < plane; i++) {
+    input[i] = data[i * 4] / 255;
+    input[plane + i] = data[i * 4 + 1] / 255;
+    input[2 * plane + i] = data[i * 4 + 2] / 255;
+  }
+
+  return {
+    tensor: new ort.Tensor('float32', input, [1, 3, INPUT_SIZE, INPUT_SIZE]),
+    scale, padX, padY, sw, sh,
+  };
+}
+
+// Decode one model's raw output into boxes in ORIGINAL image coordinates.
+function decode(output, meta, model) {
+  if (output.dims[1] !== model.rows || output.dims[2] !== NUM_ANCHORS) {
+    throw new Error(`${model.output}: expected output [1,${model.rows},${NUM_ANCHORS}], got [${output.dims.join(',')}]`);
+  }
+  const data = output.data;
+  const boxes = [];
+
+  for (let i = 0; i < NUM_ANCHORS; i++) {
+    let best = null, bestScore = 0;
+    for (const c of model.classes) {
+      const s = data[(4 + c.id) * NUM_ANCHORS + i];
+      if (s >= c.conf && s > bestScore) { bestScore = s; best = c; }
+    }
+    if (!best) continue;
+
+    const cx = data[i];
+    const cy = data[NUM_ANCHORS + i];
+    const w  = data[2 * NUM_ANCHORS + i];
+    const h  = data[3 * NUM_ANCHORS + i];
+
+    boxes.push({
+      x1: Math.max(0, (cx - w / 2 - meta.padX) / meta.scale),
+      y1: Math.max(0, (cy - h / 2 - meta.padY) / meta.scale),
+      x2: Math.min(meta.sw, (cx + w / 2 - meta.padX) / meta.scale),
+      y2: Math.min(meta.sh, (cy + h / 2 - meta.padY) / meta.scale),
+      score: bestScore,
+      label: best.label,
+      color: model.color,
+    });
+  }
+  return nms(boxes, IOU_THRESHOLD);
+}
+
+function iou(a, b) {
+  const ix = Math.max(0, Math.min(a.x2, b.x2) - Math.max(a.x1, b.x1));
+  const iy = Math.max(0, Math.min(a.y2, b.y2) - Math.max(a.y1, b.y1));
+  const inter = ix * iy;
+  const union = (a.x2 - a.x1) * (a.y2 - a.y1) + (b.x2 - b.x1) * (b.y2 - b.y1) - inter;
+  return union <= 0 ? 0 : inter / union;
+}
+
+// Per-label non-max suppression.
+function nms(boxes, iouThreshold) {
+  boxes.sort((a, b) => b.score - a.score);
+  const kept = [];
+  for (const box of boxes) {
+    if (!kept.some(k => k.label === box.label && iou(k, box) > iouThreshold)) kept.push(box);
+  }
+  return kept;
+}
+
+// Full pipeline: image/video/canvas element -> detections from all heads.
+async function detect(source) {
+  if (!session) await loadModel();
+  const meta = preprocess(source);
+  const results = await session.run({ images: meta.tensor });
+  const all = [];
+  for (const head of HEADS) all.push(...decode(results[head.output], meta, head));
+  return all;
+}
+
+// Draw detections on a canvas that is the same size as the source.
+function drawDetections(ctx, detections) {
+  ctx.lineWidth = 3;
+  ctx.font = '16px sans-serif';
+  ctx.textBaseline = 'top';
+  for (const d of detections) {
+    const text = `${d.label} ${(d.score * 100).toFixed(0)}%`;
+    const tw = ctx.measureText(text).width + 8;
+    ctx.strokeStyle = ctx.fillStyle = d.color;
+    ctx.strokeRect(d.x1, d.y1, d.x2 - d.x1, d.y2 - d.y1);
+    ctx.fillRect(d.x1, Math.max(0, d.y1 - 22), tw, 22);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(text, d.x1 + 4, Math.max(0, d.y1 - 20));
+  }
+}
+
+// ===== tracker.js =====
+// tracker.js — turns detections into pan/tilt servo angles, and sends them over Bluetooth LE.
+//
+//   PanTiltTracker : pure logic (no browser APIs), so it can be tested in Node.
+//   BleLink        : Web Bluetooth link to the ESP32 sketch (Nordic UART service).
+//
+// Angle convention (defaults): servo angle UP = camera pans RIGHT / tilts UP.
+// If your servos are mounted the other way, flip `invert` for that axis.
+
+class PanTiltTracker {
+  constructor(options = {}) {
+    const o = options;
+    this.cfg = {
+      labels: ['Human'],      // which detection labels to follow
+      minScore: 0.4,          // ignore weaker detections
+      aimY: 0.5,              // 0 = top of the box, 1 = bottom (0.35 aims at a person's upper body)
+      hfov: 60, vfov: 45,     // camera field of view in degrees: measure/tune for your phone
+      gain: 0.8,              // fraction of the remaining angle corrected per update (lower = calmer)
+      deadzone: 0.06,         // target this close to the centre (fraction of half-frame) = hold still
+      smoothing: 0.7,         // 1 = no smoothing, lower = smoother but laggier
+      maxStep: 6,             // max degrees moved per update
+      lostMs: 1500,           // after this long without a target, report "not locked"
+      actuatorLag: 150,       // ms from sending a command until the camera really points there
+      ...o,
+      pan:  { min: 10, max: 170, center: 90, invert: false, ...(o.pan  || {}) },
+      tilt: { min: 40, max: 140, center: 90, invert: false, ...(o.tilt || {}) },
+    };
+    this.reset();
+  }
+
+  reset() {
+    this.pan = this.cfg.pan.center;
+    this.tilt = this.cfg.tilt.center;
+    this.hist = [{ t: -Infinity, pan: this.pan, tilt: this.tilt }];   // commands we issued, with times
+    this.wantPan = null;
+    this.wantTilt = null;
+    this.last = null;        // last followed target centre {x, y}
+    this.lastSeen = -Infinity;
+    this.locked = false;
+  }
+
+  _clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
+
+  // Error inside the deadzone -> 0, outside -> shrunk by the deadzone (no sudden jump at the edge).
+  _soft(e) {
+    const dz = this.cfg.deadzone;
+    return Math.abs(e) <= dz ? 0 : Math.sign(e) * (Math.abs(e) - dz);
+  }
+
+  // The servo angle the camera really had at time t (commands take `actuatorLag` ms to take effect).
+  _angleAt(t) {
+    const te = t - this.cfg.actuatorLag;
+    for (let i = this.hist.length - 1; i >= 0; i--) if (this.hist[i].t <= te) return this.hist[i];
+    return this.hist[0];
+  }
+
+  _pick(dets, W) {
+    const c = this.cfg;
+    const cands = dets.filter(d => c.labels.includes(d.label) && d.score >= c.minScore);
+    if (!cands.length) return null;
+    const area = d => (d.x2 - d.x1) * (d.y2 - d.y1);
+    if (this.last) {   // stick with the previous target if one is still close to where it was
+      const dist = d => Math.hypot((d.x1 + d.x2) / 2 - this.last.x, (d.y1 + d.y2) / 2 - this.last.y);
+      const nearest = cands.reduce((a, b) => (dist(a) <= dist(b) ? a : b));
+      if (dist(nearest) < 0.25 * W) return nearest;
+    }
+    return cands.reduce((a, b) => (area(a) >= area(b) ? a : b));
+  }
+
+  // dets: output of detect() (boxes in image pixels), W,H: image size,
+  // now: time the result arrived (ms), captureTime: time the frame was grabbed (ms).
+  // Detection takes time, so the frame is older than `now`; using captureTime avoids overshoot.
+  update(dets, W, H, now = Date.now(), captureTime = now) {
+    const c = this.cfg;
+    const t = this._pick(dets, W);
+
+    if (!t) {                                   // nothing to follow: hold position
+      if (now - this.lastSeen > c.lostMs) { this.locked = false; this.last = null; }
+      return this.state(null);
+    }
+
+    const cx = (t.x1 + t.x2) / 2;
+    const cy = t.y1 + c.aimY * (t.y2 - t.y1);
+    const ex = (cx - W / 2) / (W / 2);          // -1 (left edge) .. +1 (right edge)
+    const ey = (cy - H / 2) / (H / 2);          // -1 (top edge)  .. +1 (bottom edge)
+
+    // Absolute angle that would centre the target = angle the camera had in that frame + the error.
+    const base = this._angleAt(captureTime);
+    const sp = c.pan.invert ? -1 : 1;
+    const st = c.tilt.invert ? -1 : 1;
+    const wantPan  = Math.abs(ex) <= c.deadzone ? this.pan  : base.pan  + sp * (c.hfov / 2) * this._soft(ex);
+    const wantTilt = Math.abs(ey) <= c.deadzone ? this.tilt : base.tilt - st * (c.vfov / 2) * this._soft(ey);
+
+    if (!this.locked) { this.wantPan = wantPan; this.wantTilt = wantTilt; }
+    else {
+      this.wantPan  = c.smoothing * wantPan  + (1 - c.smoothing) * this.wantPan;
+      this.wantTilt = c.smoothing * wantTilt + (1 - c.smoothing) * this.wantTilt;
+    }
+    this.locked = true;
+    this.lastSeen = now;
+    this.last = { x: cx, y: cy };
+
+    const dPan  = this._clamp(c.gain * (this.wantPan  - this.pan),  -c.maxStep, c.maxStep);
+    const dTilt = this._clamp(c.gain * (this.wantTilt - this.tilt), -c.maxStep, c.maxStep);
+    const newPan  = this._clamp(this.pan  + dPan,  c.pan.min,  c.pan.max);
+    const newTilt = this._clamp(this.tilt + dTilt, c.tilt.min, c.tilt.max);
+
+    if (newPan !== this.pan || newTilt !== this.tilt) {
+      this.pan = newPan;
+      this.tilt = newTilt;
+      this.hist.push({ t: now, pan: newPan, tilt: newTilt });
+      while (this.hist.length > 1 && this.hist[1].t < now - 3000) this.hist.shift();
+    }
+    return this.state(t);
+  }
+
+  // Used by patrol mode: move the camera directly and record it so latency compensation stays correct.
+  setAngles(pan, tilt, now = Date.now()) {
+    this.pan = this._clamp(pan, this.cfg.pan.min, this.cfg.pan.max);
+    this.tilt = this._clamp(tilt, this.cfg.tilt.min, this.cfg.tilt.max);
+    this.hist.push({ t: now, pan: this.pan, tilt: this.tilt });
+    while (this.hist.length > 1 && this.hist[1].t < now - 3000) this.hist.shift();
+  }
+
+  state(target) {
+    return { pan: this.pan, tilt: this.tilt, locked: this.locked, target };
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Bluetooth LE link (Web Bluetooth). Needs HTTPS (or localhost) and Chrome on Android/desktop.
+// connect() must be called from a click/tap handler.
+const NUS_SERVICE = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const NUS_RX = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';   // phone -> ESP32
+
+class BleLink {
+  constructor(onStatus = () => {}) {
+    this.onStatus = onStatus;
+    this.rx = null;
+    this.busy = false;
+    this.lastSent = '';
+    this.lastTime = 0;
+  }
+
+  get connected() { return !!(this.rx && this.device && this.device.gatt.connected); }
+
+  async connect() {
+    if (!navigator.bluetooth) throw new Error('Web Bluetooth not available (use Chrome on Android, over HTTPS)');
+    this.device = await navigator.bluetooth.requestDevice({ filters: [{ services: [NUS_SERVICE] }] });
+    this.device.addEventListener('gattserverdisconnected', () => { this.rx = null; this.onStatus('Bluetooth disconnected'); });
+    const server = await this.device.gatt.connect();
+    const service = await server.getPrimaryService(NUS_SERVICE);
+    this.rx = await service.getCharacteristic(NUS_RX);
+    this.onStatus('Bluetooth connected: ' + (this.device.name || 'device'));
+  }
+
+  disconnect() { if (this.device && this.device.gatt.connected) this.device.gatt.disconnect(); }
+
+  // One-off commands (L1, B0, R1 ...). Waits for the link instead of dropping the command.
+  async command(line) {
+    if (!this.connected) return;
+    for (let i = 0; this.busy && i < 100; i++) await new Promise(r => setTimeout(r, 10));
+    this.busy = true;
+    try {
+      const data = new TextEncoder().encode(line + '\n');
+      if (this.rx.writeValueWithoutResponse) await this.rx.writeValueWithoutResponse(data);
+      else await this.rx.writeValue(data);
+      this.lastTime = Date.now();
+    } catch (e) { this.onStatus('Command failed: ' + e.message); }
+    finally { this.busy = false; }
+  }
+
+  // Sends "P<pan>,T<tilt>\n". Skips repeats, but re-sends every 300 ms as a keep-alive for the failsafe.
+  async send(pan, tilt) {
+    if (!this.connected || this.busy) return;
+    const line = `P${Math.round(pan)},T${Math.round(tilt)}\n`;
+    const now = Date.now();
+    if (line === this.lastSent && now - this.lastTime < 300) return;
+    this.busy = true;
+    try {
+      const data = new TextEncoder().encode(line);
+      if (this.rx.writeValueWithoutResponse) await this.rx.writeValueWithoutResponse(data);
+      else await this.rx.writeValue(data);
+      this.lastSent = line;
+      this.lastTime = now;
+    } catch (e) {
+      this.onStatus('Send failed: ' + e.message);
+    } finally {
+      this.busy = false;
+    }
+  }
+}
+
+if (typeof module !== 'undefined') module.exports = { PanTiltTracker, BleLink };
+
+// ===== security.js =====
+// security.js — patrol, threat confirmation and alert events on top of PanTiltTracker.
+//
+// Flow:  patrol (idle sweep) -> candidate threat: lock on + start confirming
+//        -> confirmed (enough strong frames) -> ONE 'threat' event, then a cooldown.
+// The event says "possible <object>": a person must review it. Nothing here acts on its own.
+
+const _PT = (typeof PanTiltTracker !== 'undefined') ? PanTiltTracker : require('./tracker.js').PanTiltTracker;
+
+class SecurityMonitor {
+  constructor(options = {}) {
+    const o = options;
+    this.cfg = {
+      threatLabels: ['Gun', 'Knife', 'Grenade'],
+      personLabel: 'Human',
+      personMinScore: 0.4,
+      candidateScore: 0.35,    // at/above this: stop patrolling and lock on to the object
+      confirmScore: 0.6,       // a frame counts as a "hit" at/above this
+      windowSize: 8,           // look at the last N updates...
+      confirmHits: 5,          // ...and need this many hits before alerting
+      cooldownMs: 60000,       // quiet period after an alert
+      idleMs: 3000,            // no target for this long -> start patrolling
+      personHeightM: 1.7,      // used only for the rough distance estimate
+      ...o,
+      patrol: { enabled: true, speedDps: 12, panMin: 30, panMax: 150, tilt: 90, ...(o.patrol || {}) },
+    };
+    this.tracker = new _PT({ labels: [this.cfg.personLabel], minScore: this.cfg.personMinScore, ...(o.tracker || {}) });
+    this.reset();
+  }
+
+  reset() {
+    this.tracker.reset();
+    this.window = [];
+    this.lastAlertAt = -Infinity;
+    this.idleSince = null;
+    this.lastTs = null;
+    this.dir = 1;
+  }
+
+  // Rough distance to a PERSON from box height (pinhole model, assumes the whole body is visible).
+  // Expect 20-30% error. Not meaningful for weapons.
+  estimateDistance(box, H) {
+    const frac = (box.y2 - box.y1) / H;
+    if (frac < 0.05) return null;
+    const v = this.tracker.cfg.vfov * Math.PI / 180;
+    return Math.round(10 * this.cfg.personHeightM / (2 * Math.tan(v / 2) * frac)) / 10;
+  }
+
+  // The person most likely holding the object: smallest person box containing most of the object box.
+  _personFor(obj, dets) {
+    const c = this.cfg, area = b => Math.max(0, b.x2 - b.x1) * Math.max(0, b.y2 - b.y1);
+    let best = null;
+    for (const p of dets) {
+      if (p.label !== c.personLabel || p.score < c.personMinScore) continue;
+      const ix = Math.max(0, Math.min(p.x2, obj.x2) - Math.max(p.x1, obj.x1));
+      const iy = Math.max(0, Math.min(p.y2, obj.y2) - Math.max(p.y1, obj.y1));
+      if (ix * iy / Math.max(1, area(obj)) >= 0.5 && (!best || area(p) < area(best))) best = p;
+    }
+    return best;
+  }
+
+  _patrol(dt, now) {
+    const p = this.cfg.patrol, tr = this.tracker;
+    if (tr.pan >= p.panMax) this.dir = -1; else if (tr.pan <= p.panMin) this.dir = 1;
+    const step = 20 * dt;                                            // ease tilt back to the patrol angle
+    tr.setAngles(tr.pan + this.dir * p.speedDps * dt, tr.tilt + Math.max(-step, Math.min(step, p.tilt - tr.tilt)), now);
+  }
+
+  // Returns { pan, tilt, mode, locked, target, distanceM, events[] }
+  // mode: patrol | idle | tracking | confirming | alerted
+  update(dets, W, H, now = Date.now(), captureTime = now) {
+    const c = this.cfg, tr = this.tracker;
+    if (this.idleSince === null) this.idleSince = now;
+    const dt = this.lastTs === null ? 0 : Math.min(0.5, (now - this.lastTs) / 1000);
+    this.lastTs = now;
+
+    const threats = dets.filter(d => c.threatLabels.includes(d.label) && d.score >= c.candidateScore);
+    const best = threats.reduce((a, b) => (!a || b.score > a.score ? b : a), null);
+
+    // Priority: a possible threat object first, otherwise follow the nearest/largest person.
+    tr.cfg.labels = best ? c.threatLabels : [c.personLabel];
+    tr.cfg.minScore = best ? c.candidateScore : c.personMinScore;
+    const st = tr.update(dets, W, H, now, captureTime);
+
+    const strong = !!best && best.score >= c.confirmScore;
+    this.window.push(strong);
+    if (this.window.length > c.windowSize) this.window.shift();
+    const hits = this.window.filter(Boolean).length;
+
+    const events = [];
+    if (strong && hits >= c.confirmHits && now - this.lastAlertAt > c.cooldownMs) {
+      const person = this._personFor(best, dets);
+      events.push({ type: 'threat', label: best.label, score: best.score, box: best, person,
+                    distanceM: person ? this.estimateDistance(person, H) : null, time: now });
+      this.lastAlertAt = now;
+      this.window = [];
+    }
+
+    const recent = now - this.lastAlertAt < c.cooldownMs;
+    let mode = 'idle';
+    if (st.target) { this.idleSince = now; mode = best ? (recent ? 'alerted' : 'confirming') : 'tracking'; }
+    else if (c.patrol.enabled && now - this.idleSince > c.idleMs) { this._patrol(dt, now); mode = 'patrol'; }
+
+    const isPerson = st.target && st.target.label === c.personLabel;
+    return { pan: tr.pan, tilt: tr.tilt, mode, locked: tr.locked, target: st.target,
+             distanceM: isPerson ? this.estimateDistance(st.target, H) : null, events };
+  }
+}
+
+if (typeof module !== 'undefined') module.exports = { SecurityMonitor };
+
+// ===== serial_link.js =====
+// serial_link.js — wired USB (or Bluetooth-serial) link to an Arduino. Same interface as BleLink,
+// so the rest of the page doesn't care which one is used.
+//
+// Works with:
+//   - Desktop Chrome / Edge: any Arduino Nano/Uno over a USB cable (Web Serial).
+//   - Android Chrome: USB goes through WebUSB plus Google's "web-serial-polyfill", which only supports
+//     standard USB-CDC boards (Uno R3, Leonardo/Pro Micro, ...). A Nano with a CH340 chip probably is NOT
+//     supported. Set SERIAL_POLYFILL_URL below to enable it.
+//   - Not iPhone/iPad (Chrome there can't use USB devices from web pages).
+
+// To try USB on Android, set this to the polyfill's ES-module URL, pinned to an exact version you have
+// checked on npmjs.com (package "web-serial-polyfill"), e.g.
+//   'https://cdn.jsdelivr.net/npm/web-serial-polyfill@<version>/+esm'
+const SERIAL_POLYFILL_URL = '';
+
+class SerialLink {
+  constructor(onStatus = () => {}) {
+    this.onStatus = onStatus;
+    this.port = null;
+    this.writer = null;
+    this.busy = false;
+    this.lastSent = '';
+    this.lastTime = 0;
+  }
+
+  get connected() { return !!this.writer; }
+
+  async connect() {
+    let serial = navigator.serial;
+    const android = /Android/i.test(navigator.userAgent);
+    if ((android || !serial) && SERIAL_POLYFILL_URL && navigator.usb) {
+      serial = (await import(SERIAL_POLYFILL_URL)).serial;        // WebUSB-based serial for Android
+    }
+    if (!serial) {
+      throw new Error('This browser has no serial support. Use desktop Chrome/Edge, or Chrome on Android with SERIAL_POLYFILL_URL set.');
+    }
+    this.port = await serial.requestPort({ filters: [] });
+    await this.port.open({ baudRate: 115200 });
+    this.writer = this.port.writable.getWriter();
+    this.onStatus('USB opened, waiting for the Arduino to restart...');
+    await new Promise(r => setTimeout(r, 2000));                   // opening the port resets most Arduinos
+    this.onStatus('USB serial connected');
+  }
+
+  disconnect() {
+    try { if (this.writer) this.writer.releaseLock(); } catch (_) {}
+    try { if (this.port) this.port.close(); } catch (_) {}
+    this.writer = null;
+  }
+
+  async _write(line) {
+    try {
+      await this.writer.write(new TextEncoder().encode(line));
+      this.lastTime = Date.now();
+      return true;
+    } catch (e) {
+      this.writer = null;                                          // cable pulled or port closed
+      this.onStatus('USB disconnected: ' + e.message);
+      return false;
+    }
+  }
+
+  // Sends "P<pan>,T<tilt>\n". Skips repeats, but re-sends every 300 ms as a keep-alive for the failsafe.
+  async send(pan, tilt) {
+    if (!this.connected || this.busy) return;
+    const line = `P${Math.round(pan)},T${Math.round(tilt)}\n`;
+    if (line === this.lastSent && Date.now() - this.lastTime < 300) return;
+    this.busy = true;
+    if (await this._write(line)) this.lastSent = line;
+    this.busy = false;
+  }
+
+  // One-off commands (L1, B0, R1 ...). Waits for the link instead of dropping the command.
+  async command(line) {
+    if (!this.connected) return;
+    for (let i = 0; this.busy && i < 100; i++) await new Promise(r => setTimeout(r, 10));
+    this.busy = true;
+    await this._write(line + '\n');
+    this.busy = false;
+  }
+}
+
+if (typeof module !== 'undefined') module.exports = { SerialLink };
+</script>
+<script>
+// ---- Settings -------------------------------------------------------------
+const ALERT_URL = '';          // your Worker URL from alert_relay.js. Empty = alerts are only saved on this phone.
+const ALERT_KEY = '';          // the API_KEY you set on the Worker
+const PEOPLE_EVERY_MS = 5000;  // at most one saved person photo per this interval
+const PEOPLE_KEEP_MS = 24 * 3600 * 1000;   // saved people photos are deleted after this long
+const BUZZ_MS = 3000;
+// ---------------------------------------------------------------------------
+
+const $ = id => document.getElementById(id);
+const video = $('video'), overlay = $('overlay'), hud = $('hud'), statusEl = $('status');
+const setStatus = t => { statusEl.textContent = t; };
+
+// Stop with a clear message if a file is missing or is an OLD version (a common cause of "x is not defined").
+{
+  const bad = [];
+  if (typeof ort === 'undefined') bad.push('onnxruntime-web (needs internet to load from the CDN)');
+  if (typeof loadModel !== 'function' || typeof detect !== 'function' || typeof HEADS === 'undefined') bad.push('yolo.js');
+  if (typeof PanTiltTracker === 'undefined' || typeof PanTiltTracker.prototype.setAngles !== 'function' || typeof BleLink.prototype.command !== 'function') bad.push('tracker.js');
+  if (typeof SecurityMonitor === 'undefined') bad.push('security.js');
+  if (typeof SerialLink === 'undefined') bad.push('serial_link.js');
+  if (bad.length) {
+    const why = n => !n.endsWith('.js') ? n : (window.__loadIssues[n] ? `${n} [${window.__loadIssues[n]}]` : `${n} [loaded, but it is an old or wrong version]`);
+    setStatus('Problem with: ' + bad.map(why).join('; ') + '. Put the latest copy of each file in the SAME folder the server was started in, then hard-refresh (Ctrl+Shift+R).');
+    throw new Error('missing files: ' + bad.join(', '));
+  }
+}
+ort.env.wasm.numThreads = 1;
+
+const monitor = new SecurityMonitor();
+let link = new BleLink(setStatus);
+let running = false, busy = false, lastPeople = 0, lightManual = false, lightSent = null;
+const fpsWindow = [];
+const snap = document.createElement('canvas'), sctx = snap.getContext('2d', { willReadFrequently: true });
+
+// ---- Saved data (IndexedDB, stays on this phone) --------------------------
+const dbp = new Promise((res, rej) => {
+  const r = indexedDB.open('sentry', 1);
+  r.onupgradeneeded = () => { for (const s of ['alerts', 'people']) r.result.createObjectStore(s, { autoIncrement: true }); };
+  r.onsuccess = () => res(r.result);
+  r.onerror = () => rej(r.error);
+});
+async function tx(store, mode, fn) {
+  const db = await dbp;
+  return new Promise((res, rej) => {
+    const t = db.transaction(store, mode), req = fn(t.objectStore(store));
+    t.oncomplete = () => res(req && req.result);
+    t.onerror = () => rej(t.error);
+  });
+}
+const dbPut = (s, v) => tx(s, 'readwrite', o => o.add(v));
+const dbCount = s => tx(s, 'readonly', o => o.count());
+const dbClear = s => tx(s, 'readwrite', o => o.clear());
+async function dbPurge(store, olderMs) {
+  const db = await dbp;
+  return new Promise(res => {
+    const t = db.transaction(store, 'readwrite');
+    t.objectStore(store).openCursor().onsuccess = e => {
+      const c = e.target.result;
+      if (c) { if (c.value.t < Date.now() - olderMs) c.delete(); c.continue(); }
+    };
+    t.oncomplete = res;
+  });
+}
+async function refreshCounts() {
+  try { $('counts').textContent = `Saved on this phone: ${await dbCount('alerts')} alerts, ${await dbCount('people')} people photos`; }
+  catch (e) { $('counts').textContent = 'Storage unavailable: ' + e.message; }
+}
+$('resetBtn').onclick = async () => {
+  if (!confirm('Delete ALL saved alerts and people photos from this phone?')) return;
+  await dbClear('alerts'); await dbClear('people'); await refreshCounts(); setStatus('Saved data deleted.');
+};
+
+// ---- Photos ---------------------------------------------------------------
+// Crops draw from `snap` synchronously, so they always show the frame the detection came from.
+function cropBlob(box, pad = 0.15) {
+  const w = box.x2 - box.x1, h = box.y2 - box.y1;
+  const x = Math.max(0, box.x1 - w * pad), y = Math.max(0, box.y1 - h * pad);
+  const x2 = Math.min(snap.width, box.x2 + w * pad), y2 = Math.min(snap.height, box.y2 + h * pad);
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, x2 - x); c.height = Math.max(1, y2 - y);
+  c.getContext('2d').drawImage(snap, x, y, c.width, c.height, 0, 0, c.width, c.height);
+  return new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+}
+const frameBlob = () => new Promise(r => snap.toBlob(r, 'image/jpeg', 0.85));
+const area = b => (b.x2 - b.x1) * (b.y2 - b.y1);
+
+// ---- Alerts ---------------------------------------------------------------
+async function deliver(caption, blobs) {
+  await dbPut('alerts', { t: Date.now(), caption, ...blobs });
+  refreshCounts();
+  if (!$('sendChk').checked) return setStatus('Alert saved (sending is off): ' + caption);
+  if (!ALERT_URL) return setStatus('Alert saved, but ALERT_URL is empty: ' + caption);
+  const fd = new FormData();
+  fd.append('caption', caption);
+  for (const [k, b] of Object.entries(blobs)) if (b) fd.append(k, b, k + '.jpg');
+  try {
+    const r = await fetch(ALERT_URL, { method: 'POST', headers: ALERT_KEY ? { 'x-api-key': ALERT_KEY } : {}, body: fd });
+    setStatus(r.ok ? 'Alert sent: ' + caption : 'Alert FAILED to send (' + r.status + ')');
+  } catch (e) { setStatus('Alert FAILED to send: ' + e.message); }
+}
+
+function onThreat(ev) {
+  const jobs = [frameBlob(), cropBlob(ev.box), ev.person ? cropBlob(ev.person) : Promise.resolve(null)];   // capture NOW
+  link.command('B1'); setTimeout(() => link.command('B0'), BUZZ_MS);
+  const caption = `POSSIBLE ${ev.label.toUpperCase()} (${Math.round(ev.score * 100)}% confidence)`
+    + (ev.person ? `, held by a person` + (ev.distanceM ? ` about ${ev.distanceM} m away` : '') : ', no person matched')
+    + ` - ${new Date().toLocaleTimeString()}. Automatic detection, please review.`;
+  Promise.all(jobs).then(([snapshot, object, person]) => deliver(caption, { snapshot, object, person }));
+}
+
+$('testBtn').onclick = async () => {
+  if (!running) return;
+  sctx.drawImage(video, 0, 0, snap.width, snap.height);
+  await deliver('TEST ALERT - ' + new Date().toLocaleTimeString(), { snapshot: await frameBlob() });
+};
+
+// ---- Controls -------------------------------------------------------------
+$('patrolChk').onchange = e => { monitor.cfg.patrol.enabled = e.target.checked; };
+$('invPan').onchange = e => { monitor.tracker.cfg.pan.invert = e.target.checked; };
+$('invTilt').onchange = e => { monitor.tracker.cfg.tilt.invert = e.target.checked; };
+$('lightBtn').onclick = () => { lightManual = !lightManual; $('lightBtn').style.outline = lightManual ? '2px solid #ffd60a' : ''; };
+function sendCenter() { monitor.reset(); link.lastSent = ''; link.send(monitor.tracker.pan, monitor.tracker.tilt); }
+$('centerBtn').onclick = sendCenter;
+async function connectWith(LinkClass, name) {
+  try {
+    if (link.disconnect) link.disconnect();
+    link = new LinkClass(setStatus);
+    await link.connect();
+    for (const id of ['centerBtn', 'lightBtn', 'testBtn']) $(id).disabled = false;
+    lightSent = null; sendCenter();
+  } catch (e) { setStatus(name + ': ' + e.message); }
+}
+$('bleBtn').onclick = () => connectWith(BleLink, 'Bluetooth');
+$('usbBtn').onclick = () => connectWith(SerialLink, 'USB');
+
+$('startBtn').onclick = async () => {
+  $('startBtn').disabled = true;
+  try {
+    setStatus('Starting camera...');
+    video.srcObject = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+    await video.play();
+    try { await navigator.wakeLock.request('screen'); } catch (_) {}
+    setStatus('Loading model (first time can take a while)...');
+    try { const r = await fetch(MODEL_URL, { method: 'HEAD' }); if (!r.ok) throw new Error('HTTP ' + r.status); }
+    catch (e) { throw new Error('Cannot load ' + MODEL_URL + ' (' + e.message + '). Put it in the same folder as this page and open the page through the local server (http://localhost:8000), not by double-clicking.'); }
+    await loadModel();
+    overlay.width = snap.width = video.videoWidth;
+    overlay.height = snap.height = video.videoHeight;
+    $('bleBtn').disabled = false; $('usbBtn').disabled = false; $('testBtn').disabled = false;
+    running = true;
+    setStatus('Running. Tap "Connect USB" (Arduino) or "Connect Bluetooth" (ESP32) to link the controller.');
+    loop();
+  } catch (e) { setStatus('Error: ' + e.message); $('startBtn').disabled = false; }
+};
+
+async function loop() {
+  if (!running) return;
+  if (!busy && video.readyState >= 2) {
+    busy = true;
+    try {
+      sctx.drawImage(video, 0, 0, snap.width, snap.height);       // frame the detection will describe
+      const captureTime = performance.now();
+      const dets = await detect(video);
+      const now = performance.now();
+      const W = video.videoWidth, H = video.videoHeight;
+      const st = monitor.update(dets, W, H, now, captureTime);
+
+      for (const ev of st.events) onThreat(ev);
+
+      if ($('peopleChk').checked && now - lastPeople > PEOPLE_EVERY_MS) {
+        const p = dets.filter(d => d.label === 'Human' && d.score >= 0.6).sort((a, b) => area(b) - area(a))[0];
+        if (p) { lastPeople = now; cropBlob(p).then(b => dbPut('people', { t: Date.now(), blob: b })).then(refreshCounts); }
+      }
+
+      const wantLight = lightManual || st.mode === 'confirming' || st.mode === 'alerted';
+      if (link.connected && wantLight !== lightSent) { lightSent = wantLight; link.command(wantLight ? 'L1' : 'L0'); }
+      if (link.connected) link.send(st.pan, st.tilt);
+
+      const ctx = overlay.getContext('2d');
+      ctx.clearRect(0, 0, W, H);
+      drawDetections(ctx, dets);
+      if (st.target) { ctx.strokeStyle = '#ffd60a'; ctx.lineWidth = 4; ctx.strokeRect(st.target.x1, st.target.y1, st.target.x2 - st.target.x1, st.target.y2 - st.target.y1); }
+      fpsWindow.push(now); while (fpsWindow.length > 10) fpsWindow.shift();
+      const fps = fpsWindow.length > 1 ? 1000 * (fpsWindow.length - 1) / (now - fpsWindow[0]) : 0;
+      hud.textContent = `${fps.toFixed(1)} fps | ${st.mode.toUpperCase()} | pan ${st.pan.toFixed(0)} tilt ${st.tilt.toFixed(0)}`
+        + (st.distanceM ? ` | person ~${st.distanceM} m` : '') + (link.connected ? ' | device linked' : ' | device not linked');
+    } catch (e) { setStatus('Detection error: ' + e.message); }
+    busy = false;
+  }
+  requestAnimationFrame(loop);
+}
+
+dbPurge('people', PEOPLE_KEEP_MS).then(refreshCounts).catch(() => refreshCounts());
+</script>
+</body>
+</html>

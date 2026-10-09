@@ -39,6 +39,15 @@
   <div id="status">Ready. Tap "Start camera".</div>
 </div>
 
+<script>
+// Records scripts that fail to load or crash, so the startup check can say WHY a file is "missing".
+window.__loadIssues = {};
+window.addEventListener('error', e => {
+  const t = e.target, isScript = !!(t && t.tagName === 'SCRIPT');
+  const base = (isScript ? (t.getAttribute('src') || '') : (e.filename || '')).split('?')[0].split('/').pop();
+  if (base) window.__loadIssues[base] = isScript ? 'file not found (404) or blocked' : 'it crashed: ' + e.message;
+}, true);
+</script>
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.min.js"></script>
 <script src="yolo.js"></script>
 <script src="tracker.js"></script>
@@ -62,11 +71,12 @@ const setStatus = t => { statusEl.textContent = t; };
   const bad = [];
   if (typeof ort === 'undefined') bad.push('onnxruntime-web (needs internet to load from the CDN)');
   if (typeof loadModel !== 'function' || typeof detect !== 'function' || typeof HEADS === 'undefined') bad.push('yolo.js');
-  if (typeof PanTiltTracker === 'undefined') bad.push('tracker.js');
+  if (typeof PanTiltTracker === 'undefined' || typeof PanTiltTracker.prototype.setAngles !== 'function' || typeof BleLink.prototype.command !== 'function') bad.push('tracker.js');
   if (typeof SecurityMonitor === 'undefined') bad.push('security.js');
   if (typeof SerialLink === 'undefined') bad.push('serial_link.js');
   if (bad.length) {
-    setStatus('Missing or outdated: ' + bad.join(', ') + '. Put the latest copies of all the files in the same folder as index.html, then hard-refresh (Ctrl+Shift+R).');
+    const why = n => !n.endsWith('.js') ? n : (window.__loadIssues[n] ? `${n} [${window.__loadIssues[n]}]` : `${n} [loaded, but it is an old or wrong version]`);
+    setStatus('Problem with: ' + bad.map(why).join('; ') + '. Put the latest copy of each file in the SAME folder the server was started in, then hard-refresh (Ctrl+Shift+R).');
     throw new Error('missing files: ' + bad.join(', '));
   }
 }
@@ -188,6 +198,8 @@ $('startBtn').onclick = async () => {
     await video.play();
     try { await navigator.wakeLock.request('screen'); } catch (_) {}
     setStatus('Loading model (first time can take a while)...');
+    try { const r = await fetch(MODEL_URL, { method: 'HEAD' }); if (!r.ok) throw new Error('HTTP ' + r.status); }
+    catch (e) { throw new Error('Cannot load ' + MODEL_URL + ' (' + e.message + '). Put it in the same folder as this page and open the page through the local server (http://localhost:8000), not by double-clicking.'); }
     await loadModel();
     overlay.width = snap.width = video.videoWidth;
     overlay.height = snap.height = video.videoHeight;
