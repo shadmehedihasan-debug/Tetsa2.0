@@ -67,7 +67,7 @@ body {
 .disc .lens { transform-box: fill-box; transform-origin: center; animation: focus 3.4s ease-in-out 1.2s 1; }
 @keyframes focus { 0%,100% { transform: scale(1); } 45% { transform: scale(1.22); } }
 
-h1 { margin: 0; font-size: clamp(1.5rem, 3.4vw, 2rem); font-weight: 700; letter-spacing: -0.01em; }
+h1 { margin: 0; font-size: clamp(2.1rem, 5vw, 2.9rem); font-weight: 700; letter-spacing: 0.16em; text-indent: 0.16em; }
 .sub { margin: 6px 0 0; color: var(--muted); font-size: 1rem; font-weight: 500; }
 
 .btn {
@@ -86,6 +86,10 @@ h1 { margin: 0; font-size: clamp(1.5rem, 3.4vw, 2rem); font-weight: 700; letter-
 .spin { width: 16px; height: 16px; border: 2px solid rgba(255,255,255,.4); border-top-color: #fff; border-radius: 50%; animation: rot .8s linear infinite; display: none; }
 .btn[disabled] .spin { display: inline-block; }
 @keyframes rot { to { transform: rotate(360deg); } }
+h1, .sub, .btn, .version { text-transform: uppercase; }
+.sub { letter-spacing: 0.14em; text-indent: 0.14em; }
+.btn { letter-spacing: 0.08em; }
+.version { letter-spacing: 0.08em; }
 .status { min-height: 1.4em; margin: 0; font-size: .95rem; color: var(--muted); }
 .status.err { color: var(--err); }
 
