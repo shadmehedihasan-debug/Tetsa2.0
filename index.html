@@ -305,7 +305,7 @@ html:has(body.intro-mode) { height: 100%; }
   window.addEventListener('hashchange', render);
   render();
   // Demo: open the dashboard without connecting to any device
-  demo.addEventListener('click', showDashboard);
+  demo.addEventListener('click', function () { location.href = '/demo.html'; });
 
   btn.addEventListener('click', async function () {
     btn.disabled = true; demo.disabled = true;
@@ -398,6 +398,7 @@ html:has(body.intro-mode) { height: 100%; }
     if (confirm('Delete all saved incidents and photos? This cannot be undone.')) post('/api/reset').then(poll);
   });
   window.addEventListener('hashchange', sync);
+  post('/api/demo', { on: false }).catch(function () {});   // leaving demo mode if it was on
   setInterval(poll, 1000); sync();
 })();
 </script>

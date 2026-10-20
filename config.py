@@ -19,7 +19,8 @@ CAMERA_NAME = _s("CAMERA_NAME", "Back Exit")
 CAMERA_DESC = _s("CAMERA_DESC", "Monitors the back exit door.")
 RESTRICTED_START = _i("RESTRICTED_START", 22)
 RESTRICTED_END = _i("RESTRICTED_END", 6)
-CAMERA_INDEX = _i("CAMERA_INDEX", 0)
+CAMERA_INDEX = _i("CAMERA_INDEX", 0)             # phone webcam (normal mode)
+DEMO_CAMERA_INDEX = _i("DEMO_CAMERA_INDEX", 0)   # laptop camera (demo mode)
 VIDEO_PATH = _s("VIDEO_PATH", "demo.mp4")
 START_SOURCE = _s("START_SOURCE", "live")  # live | video
 

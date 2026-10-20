@@ -6,6 +6,7 @@ import config as C
 class Camera:
     def __init__(self):
         self.mode, self.cap, self.lock = C.START_SOURCE, None, threading.Lock()
+        self.index = C.CAMERA_INDEX
         self.ok, self._last = False, 0.0
 
     def switch(self, mode):
@@ -20,7 +21,7 @@ class Camera:
 
     def _open(self):
         if self.mode == "live":
-            cap = cv2.VideoCapture(C.CAMERA_INDEX, cv2.CAP_DSHOW)
+            cap = cv2.VideoCapture(self.index, cv2.CAP_DSHOW)
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         else:
             cap = cv2.VideoCapture(str(C.VIDEO_PATH))

@@ -21,13 +21,17 @@ class Aimer:
     @property
     def idle_s(self): return time.time() - self.last_target
 
-    def step(self, box, W, H, patrol=True):
+    def step(self, box, W, H, patrol=True, absolute=False):
         now = time.time(); dt = min(now - self.last_t, .5); self.last_t = now
         if box:
             self.last_target = now
-            if now < self.hold_until: return        # frame is from before the last move finished
             ex = ((box[0] + box[2]) / 2 / W - .5) * C.HFOV
             ey = ((box[1] + box[3]) / 2 / H - .5) * C.VFOV
+            if absolute:                            # demo: the camera never moves, so show where the turret WOULD point
+                self.pan += .35 * (90 + C.PAN_SIGN * ex - self.pan)
+                self.tilt += .35 * (90 + C.TILT_SIGN * ey - self.tilt)
+                self.pan = clamp(self.pan, *C.PAN_LIM); self.tilt = clamp(self.tilt, *C.TILT_LIM); return
+            if now < self.hold_until: return        # frame is from before the last move finished
             moved = False
             if abs(ex) > C.DEAD_ZONE:
                 self.pan += clamp(C.PAN_SIGN * C.GAIN * ex, -C.MAX_STEP, C.MAX_STEP); moved = True
@@ -43,6 +47,7 @@ class Aimer:
 class Turret:
     def __init__(self):
         self.ser, self.light, self.pan, self.tilt = None, False, 90.0, 90.0
+        self.simulate = False                        # demo mode: no ESP32, nothing is sent
         self._buzz = 0
         threading.Thread(target=self._run, daemon=True).start()
 
@@ -61,6 +66,9 @@ class Turret:
     def _run(self):
         while True:
             try:
+                if self.simulate:
+                    if self.ser: self.ser.close()
+                    self.ser = None; time.sleep(.2); continue
                 if self.ser is None:
                     port = self._find() if serial else None
                     if port: self.ser = serial.Serial(port, C.BAUD, timeout=.1); time.sleep(2)

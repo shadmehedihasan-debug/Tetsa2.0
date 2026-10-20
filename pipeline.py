@@ -32,6 +32,7 @@ class Pipeline:
         self.det, self.error, self.running = None, "", False
         self.armed, self.muted, self.patrol, self.light_manual = True, False, True, False
         self.mode, self.fps, self.counts, self.last_alert = "starting", 0.0, {}, {}
+        self.demo, self.buzz_until = False, 0.0
         self.jpeg, self.cond = None, threading.Condition()
 
     def start(self):
@@ -65,7 +66,7 @@ class Pipeline:
                 target = holder(w, persons) or w
             elif persons:
                 target = max(persons, key=lambda p: p.area)
-            self.aimer.step(target.box if target else None, W, H, self.patrol)
+            self.aimer.step(target.box if target else None, W, H, self.patrol, absolute=self.demo)
 
             self.mode = ("confirmed" if confirmed else "candidate" if cands else "tracking" if persons
                          else "patrol" if self.patrol and self.aimer.idle_s > C.IDLE_S else "idle")
@@ -111,9 +112,19 @@ class Pipeline:
         notify = "alert" if loud else "low" if (v["status"] == "Alert" or C.LOW_PRIORITY_SAFE) else "none"
         if loud and self.armed and not self.muted:
             self.turret.buzz(C.BUZZER_MS)
+            self.buzz_until = time.time() + C.BUZZER_MS / 1000      # the demo page plays this as a laptop sound
         self.store.finish(iid, v, notify, sent=notify == "none")
         if notify != "none":
             self.tg.deliver(self.store, iid)
+
+    def set_demo(self, on):
+        """Demo: laptop camera instead of the phone, and no ESP32 (the demo page shows a virtual turret)."""
+        if on == self.demo: return
+        self.demo = on
+        self.turret.simulate = on
+        self.cam.index = C.DEMO_CAMERA_INDEX if on else C.CAMERA_INDEX
+        self.aimer.center()
+        self.cam.switch("live")
 
     def test_alert(self):
         frame = self.cam.read()
@@ -135,4 +146,4 @@ class Pipeline:
                 "telegram": self.tg.configured, "armed": self.armed, "muted": self.muted,
                 "patrol": self.patrol, "light": self.turret.light, "counts": self.counts,
                 "restricted": C.is_restricted(datetime.now()), "error": self.error,
-                "camera_name": C.CAMERA_NAME}
+                "camera_name": C.CAMERA_NAME, "demo": self.demo, "buzzing": time.time() < self.buzz_until}

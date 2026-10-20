@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tetsa demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root { --navy: #162945; --sky: #bae6fd; --ink: #334155; --text: #0f172a; }
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; background: var(--sky); color: var(--text); font-family: "Manrope", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  padding: env(safe-area-inset-top, 0px) 0 env(safe-area-inset-bottom, 0px); }
+.bar { display: flex; align-items: center; gap: 14px; padding: 10px 16px; }
+.bar img { width: 56px; height: 56px; border-radius: 50%; background: #fff; border: 5px solid var(--navy); padding: 7px; }
+.bar h1 { margin: 0; font-size: clamp(1.4rem, 4vw, 2.2rem); font-weight: 800; letter-spacing: .2em; text-transform: uppercase; color: var(--navy); line-height: 1; }
+.bar p { margin: 4px 0 0; color: var(--ink); font-size: .9375rem; }
+.bar a { margin-left: auto; color: var(--navy); font-weight: 700; }
+main { background: #fff; margin: 0 10px 10px; padding: 18px; display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 20px; align-items: start; }
+.note { grid-column: 1 / -1; margin: 0; padding: 10px 14px; background: var(--sky); color: var(--navy); font-size: .9375rem; line-height: 1.5; }
+.video { position: relative; background: #0f172a; aspect-ratio: 16 / 9; overflow: hidden; }
+.video img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.video p { position: absolute; inset: 0; margin: 0; display: grid; place-items: center; padding: 16px; text-align: center; color: #e2e8f0; }
+.video p[hidden] { display: none; }
+.stats { margin: 10px 0 0; color: var(--ink); font-size: .9375rem; line-height: 1.5; }
+.rig { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; margin-top: 14px; padding: 12px 14px; border: 2px solid var(--sky); }
+.rig h2 { flex-basis: 100%; margin: 0; font-size: 1rem; color: var(--navy); }
+.rig svg { width: 200px; height: auto; }
+.lamp { width: 34px; height: 34px; border-radius: 50%; background: #cbd5e1; border: 3px solid var(--navy); }
+.lamp.on { background: #fde047; box-shadow: 0 0 18px 4px #facc15; }
+.rig .dev { display: flex; align-items: center; gap: 8px; font-size: .9375rem; color: var(--ink); }
+.controls { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin-top: 12px; font-size: .9375rem; color: var(--ink); }
+.controls label { display: inline-flex; align-items: center; gap: 6px; }
+.controls button { font: inherit; font-weight: 600; color: var(--navy); background: #fff; border: 2px solid var(--navy); border-radius: 8px; padding: 7px 12px; cursor: pointer; }
+.controls button:hover { background: var(--sky); }
+.controls button:focus-visible, .controls input:focus-visible { outline: 3px solid var(--navy); outline-offset: 2px; }
+.seg { display: inline-flex; }
+.seg button { border-radius: 0; margin-left: -2px; }
+.seg button:first-child { border-radius: 8px 0 0 8px; margin-left: 0; }
+.seg button:last-child { border-radius: 0 8px 8px 0; }
+.seg button.on { background: var(--navy); color: #fff; }
+.log h2 { margin: 0 0 10px; font-size: 1.125rem; color: var(--navy); }
+.log ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; max-height: 70vh; overflow-y: auto; }
+.log p { margin: 0; color: var(--ink); line-height: 1.5; }
+.log .tg { margin-bottom: 10px; font-size: .875rem; }
+.log .tg a { color: var(--navy); font-weight: 600; }
+.log li { display: grid; grid-template-columns: 96px 1fr; gap: 12px; padding: 10px; border: 2px solid var(--sky); }
+.log li img { width: 96px; height: 72px; object-fit: cover; background: #e2e8f0; display: block; }
+.log .top { display: flex; justify-content: space-between; gap: 8px; font-weight: 700; color: var(--navy); }
+.log .when { font-size: .8125rem; margin: 2px 0 4px; }
+.log .sum { font-size: .875rem; color: var(--text); }
+.badge-r { font-size: .8125rem; padding: 1px 8px; border-radius: 99px; background: var(--sky); color: var(--navy); white-space: nowrap; }
+.badge-r.hi { background: #fee2e2; color: #991b1b; }
+.badge-r.mid { background: #fef3c7; color: #92400e; }
+@media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="bar">
+  <img src="/logo.png" alt="Tetsa logo">
+  <div><h1>Tetsa demo</h1><p>Sight meets intelligence: A third eye with a brain.</p></div>
+  <a href="/">Back to start</a>
+</div>
+<main>
+  <p class="note">Demo mode: your laptop camera stands in for the phone, and the turret, spotlight and buzzer below are on screen instead of on an ESP32. The AI agent, Telegram alerts, saved photos and history work exactly as in the real setup.</p>
+  <section>
+    <div class="video">
+      <img id="video" alt="Laptop camera view">
+      <p id="offline" hidden>Cannot reach the backend. Start it with <code>py main.py</code>, then reload this page.</p>
+    </div>
+    <p class="stats" id="stats" aria-live="polite"></p>
+    <div class="rig" aria-label="Virtual turret">
+      <h2>Virtual turret</h2>
+      <svg viewBox="0 0 220 130" role="img" aria-label="Pan and tilt">
+        <path d="M 22 110 A 88 88 0 0 1 198 110" fill="none" stroke="#bae6fd" stroke-width="10"/>
+        <line id="needle" x1="110" y1="110" x2="110" y2="22" stroke="#162945" stroke-width="5" stroke-linecap="round"/>
+        <circle cx="110" cy="110" r="8" fill="#162945"/>
+        <rect x="205" y="10" width="10" height="100" fill="#bae6fd"/>
+        <rect id="tiltmark" x="201" y="55" width="18" height="6" fill="#162945"/>
+        <text x="110" y="128" text-anchor="middle" font-size="11" fill="#334155" id="angles">pan 90, tilt 90</text>
+      </svg>
+      <div class="dev"><span class="lamp" id="lamp"></span><span id="lamptxt">Spotlight off</span></div>
+      <div class="dev"><span id="buzztxt">Buzzer silent</span></div>
+    </div>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Video source">
+        <button type="button" data-src="live">Laptop camera</button>
+        <button type="button" data-src="video">Recorded video</button>
+      </div>
+      <label><input type="checkbox" id="c-armed"> Armed</label>
+      <label><input type="checkbox" id="c-muted"> Mute buzzer</label>
+      <label><input type="checkbox" id="c-patrol"> Patrol when idle</label>
+      <label><input type="checkbox" id="c-sound"> Play buzzer on laptop speaker</label>
+      <button type="button" id="b-test">Send test alert</button>
+    </div>
+  </section>
+  <section class="log">
+    <h2>Incidents</h2>
+    <p class="tg" id="tgstats"></p>
+    <p class="tg"><a href="/api/export.csv" download>Download history (CSV)</a></p>
+    <p id="empty">No incidents yet. Alerts show up here with their photos and the agent's report.</p>
+    <ul id="incidents"></ul>
+  </section>
+</main>
+<script>
+(function () {
+  var $ = function (i) { return document.getElementById(i); };
+  var api = function (p, o) { return fetch(p, o).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); }); };
+  var post = function (p, b) { return api(p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b || {}) }); };
+  var busy = false, ac = null, osc = null;
+
+  function sound(on) {
+    on = on && $('c-sound').checked && ac;
+    if (on && !osc) { osc = ac.createOscillator(); var g = ac.createGain(); g.gain.value = .08; osc.type = 'square'; osc.frequency.value = 880; osc.connect(g); g.connect(ac.destination); osc.start(); }
+    if (!on && osc) { osc.stop(); osc = null; }
+  }
+  function turret(st) {
+    var a = st.pan * Math.PI / 180;
+    $('needle').setAttribute('x2', 110 - 88 * Math.cos(a)); $('needle').setAttribute('y2', 110 - 88 * Math.sin(a));
+    $('tiltmark').setAttribute('y', 10 + (st.tilt - 40) / 100 * 100 - 3);
+    $('angles').textContent = 'pan ' + st.pan + '\u00b0, tilt ' + st.tilt + '\u00b0';
+    $('lamp').classList.toggle('on', st.light); $('lamptxt').textContent = st.light ? 'Spotlight on' : 'Spotlight off';
+    $('buzztxt').textContent = st.buzzing ? 'Buzzer sounding' : 'Buzzer silent';
+    sound(st.buzzing);
+  }
+  function render(st) {
+    $('offline').hidden = true;
+    var c = Object.keys(st.counts).map(function (k) { return st.counts[k] + ' ' + k; }).join(', ') || 'nothing detected';
+    $('stats').textContent = ['Mode: ' + st.mode, st.fps + ' fps', st.camera_name + (st.restricted ? ' (restricted hours)' : ''),
+      'AI agent ' + (st.agent ? 'ready' : 'no key, using rules'), 'Telegram ' + (st.telegram ? 'ready' : 'not set up'), c].concat(st.error ? [st.error] : []).join('  |  ');
+    document.querySelectorAll('.seg button').forEach(function (b) { b.classList.toggle('on', b.dataset.src === st.source); });
+    [['c-armed', 'armed'], ['c-muted', 'muted'], ['c-patrol', 'patrol']].forEach(function (m) { if (document.activeElement !== $(m[0])) $(m[0]).checked = !!st[m[1]]; });
+    turret(st);
+  }
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function log(list) {
+    $('empty').hidden = list.length > 0;
+    var ul = $('incidents'); ul.textContent = '';
+    list.forEach(function (i) {
+      var li = el('li'), a = el('a'), img = el('img');
+      a.href = '/incidents/' + i.id + '/scene'; a.target = '_blank'; a.rel = 'noopener';
+      img.src = '/incidents/' + i.id + '/object'; img.alt = 'Detected ' + i.label;
+      img.onerror = function () { img.src = '/incidents/' + i.id + '/scene'; };
+      a.appendChild(img); li.appendChild(a);
+      var box = el('div'), top = el('div', 'top');
+      top.appendChild(el('span', '', 'Possible ' + i.label + ' (' + Math.round(i.conf * 100) + '%)'));
+      top.appendChild(el('span', 'badge-r' + (i.risk >= 8 ? ' hi' : i.risk >= 6 ? ' mid' : ''), i.status === 'Analysing' ? 'Analysing' : i.status + ' ' + i.risk + '/10'));
+      box.appendChild(top);
+      box.appendChild(el('p', 'when', i.ts + '  |  ' + i.camera + (i.source === 'rules' ? '  |  unverified' : '') +
+        (i.notify === 'none' ? '' : i.photos_sent ? '  |  Telegram: ' + i.photos_sent + ' photos sent' : '  |  not sent to Telegram yet')));
+      box.appendChild(el('p', 'sum', i.summary));
+      li.appendChild(box); ul.appendChild(li);
+    });
+  }
+  function poll() {
+    if (busy) return;
+    api('/api/state').then(render).catch(function () { $('offline').hidden = false; });
+    api('/api/incidents').then(log).catch(function () {});
+    api('/api/history').then(function (h) {
+      var s = h.stats;
+      $('tgstats').textContent = 'Telegram: ' + s.messages_sent + ' messages, ' + s.photos_sent + ' photos sent' + (s.waiting_to_send ? ', ' + s.waiting_to_send + ' waiting to send' : '');
+    }).catch(function () {});
+  }
+  function act(p, b) { busy = true; return post(p, b).then(render).catch(function () { $('offline').hidden = false; }).then(function () { busy = false; }); }
+
+  document.querySelectorAll('.seg button').forEach(function (b) { b.addEventListener('click', function () { act('/api/source', { mode: b.dataset.src }); }); });
+  [['c-armed', 'armed'], ['c-muted', 'muted'], ['c-patrol', 'patrol']].forEach(function (m) {
+    $(m[0]).addEventListener('change', function () { var o = {}; o[m[1]] = $(m[0]).checked; act('/api/control', o); });
+  });
+  $('c-sound').addEventListener('change', function () { if ($('c-sound').checked) ac = ac || new (window.AudioContext || window.webkitAudioContext)(); else sound(false); });
+  $('b-test').addEventListener('click', function () { post('/api/test-alert').then(poll).catch(function () { alert('No camera frame yet. Allow the camera and wait a moment.'); }); });
+
+  post('/api/demo', { on: true }).catch(function () {});          // laptop camera + virtual turret
+  $('video').src = '/video';
+  window.addEventListener('pagehide', function () { navigator.sendBeacon('/api/demo', new Blob(['{"on":false}'], { type: 'application/json' })); });
+  setInterval(poll, 1000); poll();
+})();
+</script>
+</body>
+</html>

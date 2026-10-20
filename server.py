@@ -61,6 +61,10 @@ def control(body: dict = Body(...)):
         if k in body: setattr(pipe, attr, bool(body[k]))
     return pipe.state()
 
+@app.post("/api/demo")
+def demo(body: dict = Body(...)):
+    pipe.set_demo(bool(body.get("on"))); return pipe.state()
+
 @app.post("/api/center")
 def center(): pipe.aimer.center(); return pipe.state()
 
