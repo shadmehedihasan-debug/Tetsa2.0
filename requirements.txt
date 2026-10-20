@@ -1,0 +1,8 @@
+numpy
+opencv-python
+onnxruntime
+fastapi
+uvicorn
+requests
+pyserial
+python-dotenv

@@ -172,6 +172,37 @@ html:has(body.intro-mode) { height: 100%; }
   background: #ffffff;
   min-height: 200px;
 }
+
+.panel { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 20px; padding: 18px; align-items: start; }
+.video { position: relative; background: #0f172a; aspect-ratio: 16 / 9; overflow: hidden; }
+.video img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.video p { position: absolute; inset: 0; margin: 0; display: grid; place-items: center; padding: 16px; text-align: center; color: #e2e8f0; }
+.video p[hidden] { display: none; }
+.stats { margin: 10px 0 0; color: var(--ink); font-size: .9375rem; line-height: 1.5; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin-top: 12px; font-size: .9375rem; color: var(--ink); }
+.controls label { display: inline-flex; align-items: center; gap: 6px; }
+.controls button { font: inherit; font-weight: 600; color: var(--navy); background: #fff; border: 2px solid var(--navy); border-radius: 8px; padding: 7px 12px; cursor: pointer; }
+.controls button:hover { background: var(--sky); }
+.controls button.danger { border-color: #b91c1c; color: #b91c1c; }
+.controls button.danger:hover { background: #fee2e2; }
+.controls button:focus-visible, .controls input:focus-visible { outline: 3px solid var(--navy); outline-offset: 2px; }
+.seg { display: inline-flex; }
+.seg button { border-radius: 0; margin-left: -2px; }
+.seg button:first-child { border-radius: 8px 0 0 8px; margin-left: 0; }
+.seg button:last-child { border-radius: 0 8px 8px 0; }
+.seg button.on { background: var(--navy); color: #fff; }
+.log h2 { margin: 0 0 10px; font-size: 1.125rem; color: var(--navy); }
+.log ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; max-height: 70vh; overflow-y: auto; }
+.log #empty { margin: 0; color: var(--ink); line-height: 1.5; }
+.log li { display: grid; grid-template-columns: 96px 1fr; gap: 12px; padding: 10px; border: 2px solid var(--sky); }
+.log li img { width: 96px; height: 72px; object-fit: cover; background: #e2e8f0; display: block; }
+.log .top { display: flex; justify-content: space-between; gap: 8px; font-weight: 700; color: var(--navy); }
+.log .when { font-size: .8125rem; color: var(--ink); margin: 2px 0 4px; }
+.log .sum { margin: 0; font-size: .875rem; line-height: 1.45; color: var(--text); }
+.badge-r { font-size: .8125rem; padding: 1px 8px; border-radius: 99px; background: var(--sky); color: var(--navy); white-space: nowrap; }
+.badge-r.hi { background: #fee2e2; color: #991b1b; }
+.badge-r.mid { background: #fef3c7; color: #92400e; }
+@media (max-width: 900px) { .panel { grid-template-columns: 1fr; } }
 @media (max-width: 560px) {
   .badge { border-width: 4px; }
   .tagline { font-size: .9375rem; }
@@ -202,7 +233,33 @@ html:has(body.intro-mode) { height: 100%; }
     <h1>Tetsa</h1>
     <p class="tagline">Sight meets intelligence: A third eye with a brain.</p>
   </header>
-  <main class="panel"></main>
+  <main class="panel">
+    <section class="feed">
+      <div class="video">
+        <img id="video" alt="Live camera view">
+        <p id="offline" hidden>Cannot reach the backend. Start it with <code>py main.py</code>, then reload this page.</p>
+      </div>
+      <p class="stats" id="stats" aria-live="polite"></p>
+      <div class="controls">
+        <div class="seg" role="group" aria-label="Video source">
+          <button type="button" data-src="live">Live camera</button>
+          <button type="button" data-src="video">Recorded video</button>
+        </div>
+        <label><input type="checkbox" id="c-armed"> Armed</label>
+        <label><input type="checkbox" id="c-muted"> Mute buzzer</label>
+        <label><input type="checkbox" id="c-patrol"> Patrol when idle</label>
+        <label><input type="checkbox" id="c-light"> Light on</label>
+        <button type="button" id="b-center">Center camera</button>
+        <button type="button" id="b-test">Send test alert</button>
+        <button type="button" id="b-reset" class="danger">Reset saved data</button>
+      </div>
+    </section>
+    <section class="log">
+      <h2>Incidents</h2>
+      <p id="empty">No incidents yet. Alerts show up here with their photos and the agent's report.</p>
+      <ul id="incidents"></ul>
+    </section>
+  </main>
 </div>
 </div>
 <div class="version">version 2.1.2</div>
@@ -212,9 +269,9 @@ html:has(body.intro-mode) { height: 100%; }
   var label = document.getElementById('label');
   var status = document.getElementById('status');
   // Change to the Python server address once the backend exists.
-  var BACKEND = 'http://localhost:8000/api/health';
+  var BACKEND = '/api/health';
   
-  var SIMULATE = true; // no backend yet: fake a successful check
+  var SIMULATE = false;
 
   function setStatus(msg, isErr) {
     status.textContent = msg;
@@ -255,7 +312,7 @@ html:has(body.intro-mode) { height: 100%; }
       if (!r.camera) throw new Error('Camera not found. Start DroidCam and try again.');
       if (!r.turret) throw new Error('Turret not found. Plug in the ESP32 and try again.');
       label.textContent = 'Connected';
-      setStatus(SIMULATE ? 'Demo mode: backend not connected yet.' : 'Device ready.', false);
+      setStatus(SIMULATE ? 'Device ready.' : 'Device ready.', false);
       await wait(900);
       showDashboard();
     } catch (e) {
@@ -267,6 +324,72 @@ html:has(body.intro-mode) { height: 100%; }
       btn.disabled = false; demo.disabled = false;
     }
   });
+})();
+</script>
+
+<script>
+(function () {
+  var $ = function (i) { return document.getElementById(i); };
+  var api = function (p, o) { return fetch(p, o).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); }); };
+  var post = function (p, b) { return api(p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b || {}) }); };
+  var busy = false;
+
+  function stats(st) {
+    var c = Object.keys(st.counts).map(function (k) { return st.counts[k] + ' ' + k; }).join(', ') || 'nothing detected';
+    var parts = ['Mode: ' + st.mode, st.fps + ' fps', st.camera_name + (st.restricted ? ' (restricted hours)' : ''),
+      'Pan ' + st.pan + '\u00b0, tilt ' + st.tilt + '\u00b0', 'Turret ' + (st.turret ? 'connected' : 'not connected'),
+      'AI agent ' + (st.agent ? 'ready' : 'no key, using rules'), 'Telegram ' + (st.telegram ? 'ready' : 'not set up'), c];
+    if (st.error) parts.push(st.error);
+    $('stats').textContent = parts.join('  |  ');
+  }
+  function render(st) {
+    $('offline').hidden = true;
+    stats(st);
+    document.querySelectorAll('.seg button').forEach(function (b) { b.classList.toggle('on', b.dataset.src === st.source); });
+    [['c-armed', 'armed'], ['c-muted', 'muted'], ['c-patrol', 'patrol'], ['c-light', 'light']].forEach(function (m) {
+      if (document.activeElement !== $(m[0])) $(m[0]).checked = !!st[m[1]];
+    });
+  }
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function log(list) {
+    $('empty').hidden = list.length > 0;
+    var ul = $('incidents'); ul.textContent = '';
+    list.forEach(function (i) {
+      var li = el('li'), a = el('a'), img = el('img');
+      a.href = '/incidents/' + i.id + '/scene'; a.target = '_blank'; a.rel = 'noopener';
+      img.src = '/incidents/' + i.id + '/object'; img.alt = 'Detected ' + i.label;
+      img.onerror = function () { img.src = '/incidents/' + i.id + '/scene'; };
+      a.appendChild(img); li.appendChild(a);
+      var box = el('div'), top = el('div', 'top');
+      top.appendChild(el('span', '', 'Possible ' + i.label + ' (' + Math.round(i.conf * 100) + '%)'));
+      var risk = i.status === 'Analysing' ? 'Analysing' : i.status + ' ' + i.risk + '/10';
+      top.appendChild(el('span', 'badge-r' + (i.risk >= 8 ? ' hi' : i.risk >= 6 ? ' mid' : ''), risk));
+      box.appendChild(top);
+      box.appendChild(el('p', 'when', i.ts + '  |  ' + i.camera + (i.source === 'rules' ? '  |  unverified' : '')));
+      box.appendChild(el('p', 'sum', i.summary));
+      li.appendChild(box); ul.appendChild(li);
+    });
+  }
+  function onDash() { return location.hash === '#dashboard'; }
+  function poll() {
+    if (!onDash() || busy) return;
+    api('/api/state').then(render).catch(function () { $('offline').hidden = false; });
+    api('/api/incidents').then(log).catch(function () {});
+  }
+  function sync() { $('video').src = onDash() ? '/video' : ''; $('offline').hidden = true; poll(); }
+  function act(p, b) { busy = true; return post(p, b).then(render).catch(function () { $('offline').hidden = false; }).then(function () { busy = false; }); }
+
+  document.querySelectorAll('.seg button').forEach(function (b) { b.addEventListener('click', function () { act('/api/source', { mode: b.dataset.src }); }); });
+  [['c-armed', 'armed'], ['c-muted', 'muted'], ['c-patrol', 'patrol'], ['c-light', 'light']].forEach(function (m) {
+    $(m[0]).addEventListener('change', function () { var o = {}; o[m[1]] = $(m[0]).checked; act('/api/control', o); });
+  });
+  $('b-center').addEventListener('click', function () { act('/api/center'); });
+  $('b-test').addEventListener('click', function () { post('/api/test-alert').then(poll).catch(function () { alert('No camera frame yet. Start the camera first.'); }); });
+  $('b-reset').addEventListener('click', function () {
+    if (confirm('Delete all saved incidents and photos? This cannot be undone.')) post('/api/reset').then(poll);
+  });
+  window.addEventListener('hashchange', sync);
+  setInterval(poll, 1000); sync();
 })();
 </script>
 </body>
