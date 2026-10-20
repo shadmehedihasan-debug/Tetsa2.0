@@ -37,7 +37,7 @@ COOLDOWN_S = 60
 ALERT_MIN_RISK = 6
 LOW_PRIORITY_SAFE = True      # still send a quiet message when the agent says Safe
 BUZZER_MS = 3000
-RETAIN_DAYS = 7
+RETAIN_DAYS = _i("RETAIN_DAYS", 7)   # photos are deleted after this; the Telegram history counts stay
 
 # turret / aiming
 HFOV, VFOV = _f("HFOV", 60), _f("VFOV", 45)

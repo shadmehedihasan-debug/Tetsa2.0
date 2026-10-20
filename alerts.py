@@ -37,7 +37,13 @@ class Telegram:
         except Exception:
             return False
 
+    def deliver(self, store, iid):
+        """Send one incident and, if Telegram accepts it, record how many photos went out."""
+        inc, paths = store.get(iid), store.images(iid)
+        if inc and self.send(inc, paths):
+            store.mark_sent(iid); store.log_send(iid, inc["notify"], len(paths)); return True
+        return False
+
     def flush(self, store):
         for inc in store.unsent():
-            if self.send(inc, store.images(inc["id"])):
-                store.mark_sent(inc["id"])
+            self.deliver(store, inc["id"])

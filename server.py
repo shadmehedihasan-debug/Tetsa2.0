@@ -1,6 +1,7 @@
 """Web server: live video, state, incidents, controls, and the dashboard page itself."""
 import time
 from fastapi import Body, FastAPI, HTTPException
+from fastapi import Response
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import config as C
@@ -21,6 +22,14 @@ def state(): return pipe.state()
 
 @app.get("/api/incidents")
 def incidents(): return pipe.store.recent()
+
+@app.get("/api/history")
+def history(): return {"stats": pipe.store.stats(), "log": pipe.store.history()}
+
+@app.get("/api/export.csv")
+def export_csv():
+    return Response("\ufeff" + pipe.store.export_csv(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="tetsa_history.csv"'})
 
 @app.get("/incidents/{iid}/{kind}")
 def evidence(iid: int, kind: str):

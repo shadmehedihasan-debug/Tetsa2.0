@@ -113,8 +113,7 @@ class Pipeline:
             self.turret.buzz(C.BUZZER_MS)
         self.store.finish(iid, v, notify, sent=notify == "none")
         if notify != "none":
-            inc = self.store.get(iid)
-            if self.tg.send(inc, self.store.images(iid)): self.store.mark_sent(iid)
+            self.tg.deliver(self.store, iid)
 
     def test_alert(self):
         frame = self.cam.read()

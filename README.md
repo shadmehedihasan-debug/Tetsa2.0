@@ -17,5 +17,7 @@ firmware/  esp32_turret/esp32_turret.ino
 ## Tuning
 - Camera moves the wrong way: set `PAN_SIGN=-1` or `TILT_SIGN=1` in `.env`
 - Overshoots: lower `GAIN` or raise `LAG_S` in `config.py`
+- Photos and Telegram history: every incident's photos are in `backend/data/incidents/<id>/`; every Telegram message is logged with its photo count (`/api/history`). Photos are deleted after `RETAIN_DAYS` (default 7, set in `.env`); the counts stay until you press Reset
+- Database: `backend/data/tetsa.db` (SQLite, created on first run from `backend/schema.sql`). Open it with DB Browser for SQLite, or press "Download history (CSV)" on the dashboard
 - Phone not found: try `CAMERA_INDEX=1` or `2`
 - Wrong model name for Gemini: set `GEMINI_MODEL` in `.env`

@@ -196,6 +196,8 @@ html:has(body.intro-mode) { height: 100%; }
 .log #empty { margin: 0; color: var(--ink); line-height: 1.5; }
 .log li { display: grid; grid-template-columns: 96px 1fr; gap: 12px; padding: 10px; border: 2px solid var(--sky); }
 .log li img { width: 96px; height: 72px; object-fit: cover; background: #e2e8f0; display: block; }
+.log .tgstats { margin: 0 0 10px; font-size: .875rem; color: var(--ink); }
+.log .tgstats a { color: var(--navy); font-weight: 600; }
 .log .top { display: flex; justify-content: space-between; gap: 8px; font-weight: 700; color: var(--navy); }
 .log .when { font-size: .8125rem; color: var(--ink); margin: 2px 0 4px; }
 .log .sum { margin: 0; font-size: .875rem; line-height: 1.45; color: var(--text); }
@@ -256,6 +258,8 @@ html:has(body.intro-mode) { height: 100%; }
     </section>
     <section class="log">
       <h2>Incidents</h2>
+      <p id="tgstats" class="tgstats"></p>
+      <p class="tgstats"><a href="/api/export.csv" download>Download history (CSV)</a></p>
       <p id="empty">No incidents yet. Alerts show up here with their photos and the agent's report.</p>
       <ul id="incidents"></ul>
     </section>
@@ -365,7 +369,7 @@ html:has(body.intro-mode) { height: 100%; }
       var risk = i.status === 'Analysing' ? 'Analysing' : i.status + ' ' + i.risk + '/10';
       top.appendChild(el('span', 'badge-r' + (i.risk >= 8 ? ' hi' : i.risk >= 6 ? ' mid' : ''), risk));
       box.appendChild(top);
-      box.appendChild(el('p', 'when', i.ts + '  |  ' + i.camera + (i.source === 'rules' ? '  |  unverified' : '')));
+      box.appendChild(el('p', 'when', i.ts + '  |  ' + i.camera + (i.source === 'rules' ? '  |  unverified' : '') + (i.notify === 'none' ? '' : i.photos_sent ? '  |  Telegram: ' + i.photos_sent + ' photos sent' : '  |  not sent to Telegram yet')));
       box.appendChild(el('p', 'sum', i.summary));
       li.appendChild(box); ul.appendChild(li);
     });
@@ -375,6 +379,11 @@ html:has(body.intro-mode) { height: 100%; }
     if (!onDash() || busy) return;
     api('/api/state').then(render).catch(function () { $('offline').hidden = false; });
     api('/api/incidents').then(log).catch(function () {});
+    api('/api/history').then(function (h) {
+      var s = h.stats;
+      $('tgstats').textContent = 'Telegram: ' + s.messages_sent + ' messages, ' + s.photos_sent + ' photos sent' +
+        (s.waiting_to_send ? ', ' + s.waiting_to_send + ' waiting to send' : '') + (s.last_sent ? ', last at ' + s.last_sent : '');
+    }).catch(function () {});
   }
   function sync() { $('video').src = onDash() ? '/video' : ''; $('offline').hidden = true; poll(); }
   function act(p, b) { busy = true; return post(p, b).then(render).catch(function () { $('offline').hidden = false; }).then(function () { busy = false; }); }
