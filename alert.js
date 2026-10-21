@@ -22,9 +22,20 @@ module.exports = async (req, res) => {
   try {
     const fd = new FormData();
     fd.append('chat_id', chat);
-    fd.append('media', JSON.stringify(b.images.map((_, i) => ({ type: 'photo', media: `attach://p${i}`, ...(i === 0 ? { caption } : {}) }))));
-    b.images.forEach((s, i) => fd.append(`p${i}`, new Blob([Buffer.from(s, 'base64')], { type: 'image/jpeg' }), `p${i}.jpg`));
-    const r = await fetch(`https://api.telegram.org/bot${token}/sendMediaGroup`, { method: 'POST', body: fd });
-    return res.json(r.ok ? { ok: true, photos: b.images.length } : { ok: false, reason: 'Telegram refused the message' });
+    const blob = (s) => new Blob([Buffer.from(s, 'base64')], { type: 'image/jpeg' });
+    let method;
+    if (b.images.length === 1) {              // sendMediaGroup needs at least 2 photos
+      method = 'sendPhoto';
+      fd.append('caption', caption);
+      fd.append('photo', blob(b.images[0]), 'p0.jpg');
+    } else {
+      method = 'sendMediaGroup';
+      fd.append('media', JSON.stringify(b.images.map((_, i) => ({ type: 'photo', media: `attach://p${i}`, ...(i === 0 ? { caption } : {}) }))));
+      b.images.forEach((s, i) => fd.append(`p${i}`, blob(s), `p${i}.jpg`));
+    }
+    const r = await fetch(`https://api.telegram.org/bot${token}/${method}`, { method: 'POST', body: fd });
+    if (r.ok) return res.json({ ok: true, photos: b.images.length });
+    const j = await r.json().catch(() => ({}));
+    return res.json({ ok: false, reason: 'Telegram refused it: ' + String(j.description || r.status).slice(0, 120) });
   } catch (e) { return res.json({ ok: false, reason: 'could not reach Telegram' }); }
 };
