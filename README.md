@@ -1,26 +1,28 @@
-# Tetsa
+# Tetsa web demo (separate from the main system)
+
+Anyone who opens the link gets the page, which asks for their own camera and starts automatically.
+The detector runs in their browser. Two small serverless functions call Gemini (the AI agent) and
+Telegram (your bot), so your keys stay on the server.
 
 ```
-backend/   Python: camera, detector, tracker, AI agent (Gemini), Telegram, ESP32 link, web server
-frontend/  index.html: intro page + dashboard (served by the backend)
-firmware/  esp32_turret/esp32_turret.ino
+index.html, style.css, engine.js, app.js   the page (camera, detector, virtual turret, history)
+api/assess.js    AI agent: Gemini looks at the photos and returns Alert/Safe, risk, summary (rules if it fails)
+api/alert.js     sends the alert and photos to your Telegram chat
+model/           put threat_detector.onnx here  (model/threat_detector.onnx)
 ```
 
-## Run
-1. `cd backend`, then `py -m pip install -r requirements.txt`
-2. Copy `threat_detector.onnx` into `backend/models/`
-3. Copy `.env.example` to `.env` and fill in your keys (never share this file)
-4. For the recorded-video backup, put an `.mp4` at `backend/demo.mp4`
-5. `py main.py`, then open http://localhost:8000
-6. Flash `firmware/esp32_turret/esp32_turret.ino` with the Arduino IDE (library: ESP32Servo)
+## Deploy on Vercel
+1. Copy `threat_detector.onnx` into `demo/model/`.
+2. In Vercel, create or open the project and set its **Root Directory** to `demo`, then deploy.
+3. Project Settings -> Environment Variables: `GEMINI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
+   (optional: `GEMINI_MODEL`, and `DEMO_ALERTS=off` to stop all Telegram sending). Redeploy after adding them.
+4. Open the link in Chrome or Edge on a laptop and allow the camera.
 
-## Demo for judges
-The demo is a separate project in `demo/` that runs entirely on a website, with no backend, phone or ESP32 on your side. See `demo/README.md`. The **Demo** button on the intro page opens it.
-
-## Tuning
-- Camera moves the wrong way: set `PAN_SIGN=-1` or `TILT_SIGN=1` in `.env`
-- Overshoots: lower `GAIN` or raise `LAG_S` in `config.py`
-- Photos and Telegram history: every incident's photos are in `backend/data/incidents/<id>/`; every Telegram message is logged with its photo count (`/api/history`). Photos are deleted after `RETAIN_DAYS` (default 7, set in `.env`); the counts stay until you press Reset
-- Database: `backend/data/tetsa.db` (SQLite, created on first run from `backend/schema.sql`). Open it with DB Browser for SQLite, or press "Download history (CSV)" on the dashboard
-- Phone not found: try `CAMERA_INDEX=1` or `2`
-- Wrong model name for Gemini: set `GEMINI_MODEL` in `.env`
+## Notes
+- Camera needs https (Vercel gives that) or localhost. Nothing is installed by the judge.
+- Each judge's history and photos are saved only in their own browser (last 8 incidents), not on your server.
+- Public limits: 12 AI checks and 4 Telegram alerts per visitor per 10 minutes, 40 alerts per hour in total
+  (best effort, per server instance). Turn Telegram off with `DEMO_ALERTS=off` if it gets abused.
+- Judges' camera photos go to Gemini and to your Telegram only when a threat is confirmed and the
+  "Send alerts to Telegram" box is ticked. The page says so. Avoid keeping those photos longer than needed.
+- The detector runs on the judge's laptop CPU, so expect a few frames per second.
