@@ -14,8 +14,8 @@ firmware/  esp32_turret/esp32_turret.ino
 5. `py main.py`, then open http://localhost:8000
 6. Flash `firmware/esp32_turret/esp32_turret.ino` with the Arduino IDE (library: ESP32Servo)
 
-## Demo (no phone, no ESP32)
-Open `http://localhost:8000/demo.html`, or press **Demo** on the intro page. The laptop camera replaces the phone (`DEMO_CAMERA_INDEX` in `.env`), a virtual turret on the page replaces the ESP32, and the laptop speaker replaces the buzzer. The AI agent, Telegram alerts, history and photos work exactly as in the real setup.
+## Demo for judges
+The demo is a separate project in `demo/` that runs entirely on a website, with no backend, phone or ESP32 on your side. See `demo/README.md`. The **Demo** button on the intro page opens it.
 
 ## Tuning
 - Camera moves the wrong way: set `PAN_SIGN=-1` or `TILT_SIGN=1` in `.env`

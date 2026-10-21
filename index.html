@@ -239,7 +239,7 @@ html:has(body.intro-mode) { height: 100%; }
     <section class="feed">
       <div class="video">
         <img id="video" alt="Live camera view">
-        <p id="offline" hidden>Cannot reach the backend. Start it with <code>py main.py</code>, then reload this page.</p>
+        <p id="offline" hidden><span>Cannot reach the backend. Start it with <code>py main.py</code>, then open <code>http://localhost:8000</code>.</span></p>
       </div>
       <p class="stats" id="stats" aria-live="polite"></p>
       <div class="controls">
@@ -305,7 +305,8 @@ html:has(body.intro-mode) { height: 100%; }
   window.addEventListener('hashchange', render);
   render();
   // Demo: open the dashboard without connecting to any device
-  demo.addEventListener('click', function () { location.href = '/demo.html'; });
+  var DEMO_URL = 'https://tetsa20.vercel.app/';   // the separate web demo (see demo/README.md)
+  demo.addEventListener('click', function () { window.open(DEMO_URL, '_blank', 'noopener'); });
 
   btn.addEventListener('click', async function () {
     btn.disabled = true; demo.disabled = true;
