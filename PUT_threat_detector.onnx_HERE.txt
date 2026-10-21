@@ -1,1 +1,1 @@
-Copy threat_detector.onnx into this folder.
+Copy threat_detector.onnx into this folder (model/).
