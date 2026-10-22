@@ -48,7 +48,7 @@
       : await post('/api/assess', { label, conf, hasPerson: !!person, restricted, time: now.toLocaleString([], { weekday: 'long', hour: '2-digit', minute: '2-digit' }), images: imgs }).catch(() => null);
     if (!v || !v.status) v = rulesLocal(label, restricted, !!person);
     const loud = v.status === 'Alert' && v.risk >= 6;
-    Object.assign(inc, { status: v.status, risk: v.risk, summary: v.summary, source: v.source, notify: loud ? 'alert' : 'low' });
+    Object.assign(inc, { status: v.status, risk: v.risk, summary: v.summary, source: v.source, notify: loud ? 'alert' : 'low', rules: v.rules || [] });
     if (loud && $('c-armed').checked && !$('c-muted').checked) buzz(3000);
     render();
     if ($('c-tg').checked) {
@@ -80,12 +80,19 @@
     const now = Date.now();
     for (const w of sure) if (!w.alerted) { w.alerted = true; if (now - (lastAlert[w.label] || 0) > 60000) { lastAlert[w.label] = now; raise(w.label, lastConf(w), w.box, holder(w, persons), false); } }
     counts = {}; if (overlay.width !== W) { overlay.width = W; overlay.height = H; }
-    octx.clearRect(0, 0, W, H); octx.lineWidth = Math.max(2, W / 320); octx.font = 'bold ' + Math.max(14, W / 50) + 'px sans-serif';
-    for (const t of live) {
+    octx.clearRect(0, 0, W, H);
+    const lw = Math.max(3, W / 240), fs = Math.max(14, W / 48);
+    octx.lineWidth = lw; octx.font = 'bold ' + fs + 'px sans-serif'; octx.textBaseline = 'middle';
+    for (const t of live) {                       // one square box with a label for EVERY detected object
       counts[t.label] = (counts[t.label] || 0) + 1;
-      const col = t.label === 'Human' ? '#50c85a' : confirmed(t) ? '#e63c3c' : '#ffaa00', b = t.box;
-      octx.strokeStyle = octx.fillStyle = col; octx.strokeRect(b[0], b[1], b[2] - b[0], b[3] - b[1]);
-      octx.fillText(t.label + ' ' + lastConf(t).toFixed(2), b[0], Math.max(16, b[1] - 6));
+      const col = t.label === 'Human' ? '#22c55e' : t.label === 'Explosion' ? '#a855f7' : confirmed(t) ? '#ef4444' : '#f59e0b';
+      const b = t.box, bw = b[2] - b[0], bh = b[3] - b[1];
+      octx.fillStyle = col + '26'; octx.fillRect(b[0], b[1], bw, bh);          // light tint inside the box
+      octx.strokeStyle = col; octx.strokeRect(b[0], b[1], bw, bh);
+      const text = t.label + ' ' + Math.round(lastConf(t) * 100) + '%', tw = octx.measureText(text).width + 12, th = fs + 8;
+      const ly = b[1] - th >= 0 ? b[1] - th : b[1];                              // label tab above the box (inside if no room)
+      octx.fillStyle = col; octx.fillRect(b[0] - lw / 2, ly, tw, th);
+      octx.fillStyle = '#fff'; octx.fillText(text, b[0] + 6, ly + th / 2 + 1);
     }
   }
   async function loop() {
@@ -127,6 +134,7 @@
       box.appendChild(el('p', 'when', i.ts + '  |  Back Exit' + (i.source === 'rules' ? '  |  unverified' : '') +
         (i.notify === 'none' ? '' : i.photos_sent ? '  |  Telegram: ' + i.photos_sent + ' photos sent' : '  |  not sent to Telegram' + (i.note ? ' (' + i.note + ')' : ''))));
       box.appendChild(el('p', 'sum', i.summary));
+      if (i.rules && i.rules.length) box.appendChild(el('p', 'when', 'Rules used: ' + i.rules.join('; ')));
       li.appendChild(img); li.appendChild(box); li.appendChild(more); ul.appendChild(li);
     });
   }
